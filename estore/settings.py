@@ -152,6 +152,7 @@ CSRF_TRUSTED_ORIGINS = [
 
 CORS_ALLOWED_ORIGINS = [
     "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
+    "https://estore-frontend-boqb.vercel.app/"
 ]
 CORS_ALLOW_CREDENTIALS = True
 
