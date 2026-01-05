@@ -44,6 +44,16 @@ INSTALLED_APPS = [
     "api",
 ]
 
+# Cloudinary Config
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': os.environ.get('CLOUD_NAME'),
+    'API_KEY': os.environ.get('API_KEY'),
+    'API_SECRET': os.environ.get('API_ENVIRONMENT_VARIABLE'),
+}
+
+# Set as default media storage
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
 # ------------------------------------------------------------------------------
 # MIDDLEWARE
 # ------------------------------------------------------------------------------
