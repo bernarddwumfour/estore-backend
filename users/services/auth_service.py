@@ -93,7 +93,7 @@ class AuthService:
 
             # Generate tokens
             access_token = generate_jwt_token(user, "access")
-            refresh_token, _ = generate_jwt_token(user, "refresh")
+            refresh_token= generate_jwt_token(user, "refresh")
 
             # Prepare response data
             user_data = {
@@ -172,6 +172,8 @@ class AuthService:
                 first_name=data["first_name"].strip(),
                 last_name=data["last_name"].strip(),
                 role=User.ROLE_CUSTOMER,  # Always customer for self-registration
+                email_verified =  True
+
             )
 
             # Set optional phone if provided
@@ -188,7 +190,7 @@ class AuthService:
 
             # Generate tokens
             access_token = generate_jwt_token(user, "access")
-            refresh_token, _ = generate_jwt_token(user, "refresh")
+            refresh_token= generate_jwt_token(user, "refresh")
 
             # Prepare response data
             user_data = {
