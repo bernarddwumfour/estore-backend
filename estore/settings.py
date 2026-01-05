@@ -48,7 +48,7 @@ INSTALLED_APPS = [
 CLOUDINARY_STORAGE = {
     'CLOUD_NAME': "drsqxdahw",
     'API_KEY': "457119295599663",
-    'API_SECRET': "CLOUDINARY_URL=cloudinary://457119295599663:FmxtK7gXuSWJGQppPpQCp8WDNAk@drsqxdahw",
+    'API_SECRET': "FmxtK7gXuSWJGQppPpQCp8WDNAk",
 }
 
 # Set as default media storage
