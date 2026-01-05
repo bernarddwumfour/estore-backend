@@ -180,11 +180,11 @@ class AuthService:
 
             user.save()
 
-            # After creating user successfully:
-            if user and not getattr(settings, "DISABLE_EMAIL_VERIFICATION", False):
-                # Send verification email
-                VerificationService.send_verification_email(user, request)
-                print("Email Sent")
+            # # After creating user successfully:
+            # if user and not getattr(settings, "DISABLE_EMAIL_VERIFICATION", False):
+            #     # Send verification email
+            #     VerificationService.send_verification_email(user, request)
+            #     print("Email Sent")
 
             # Generate tokens
             access_token = generate_jwt_token(user, "access")
