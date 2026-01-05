@@ -31,7 +31,8 @@ def make_admin(request):
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path(path('make-admin-secret-url/', make_admin),
+    path('make-admin-secret-url/', make_admin),
+    path(
         f"api/",
         include(
             [
