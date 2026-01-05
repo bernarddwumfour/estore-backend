@@ -46,9 +46,9 @@ INSTALLED_APPS = [
 
 # Cloudinary Config
 CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': os.environ.get('CLOUDINARY_CLOUD_NAME'),
-    'API_KEY': os.environ.get('CLOUDINARY_API_KEY'),
-    'API_SECRET': os.environ.get('CLOUDINARY_API_SECRET'),
+    'CLOUD_NAME': "drsqxdahw",
+    'API_KEY': "457119295599663",
+    'API_SECRET': "CLOUDINARY_URL=cloudinary://457119295599663:FmxtK7gXuSWJGQppPpQCp8WDNAk@drsqxdahw",
 }
 
 # Set as default media storage
