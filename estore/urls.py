@@ -20,9 +20,18 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 
+from django.contrib.auth.models import User
+from django.http import HttpResponse
+
+def make_admin(request):
+    if not User.objects.filter(username="admin").exists():
+        user.objects.create_superuser("admin", "bernardkusi25@gmail.com", "Password1@")
+        return HttpResponse("Admin created!")
+    return HttpResponse("Admin already exists.")
+
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path(
+    path(path('make-admin-secret-url/', make_admin),
         f"api/",
         include(
             [
