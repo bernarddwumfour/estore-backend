@@ -175,6 +175,21 @@ JWT_SETTINGS = {
 # ------------------------------------------------------------------------------
 # LOGGING
 # ------------------------------------------------------------------------------
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+        },
+    },
+    'root': {
+        'handlers': ['console'],
+        'level': 'INFO',
+    },
+}
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -191,6 +206,13 @@ LOGGING = {
     },
 }
 
+# Only log to file if NOT on Render
+if not os.environ.get('RENDER'):
+    LOGGING['handlers']['file'] = {
+        'level': 'DEBUG',
+        'class': 'logging.FileHandler',
+        'filename': 'debug.log',
+    }
 
 # Email Configuration
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
