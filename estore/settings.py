@@ -123,7 +123,10 @@ USE_TZ = True
 # ------------------------------------------------------------------------------
 # STATIC FILES
 # ------------------------------------------------------------------------------
-STATIC_URL = "/static/"
+STATIC_URL = '/static/'
+STATIC_ROOT = os.path.join(BASE_DIR, 'staticfiles')
+
+STATICFILES_STORAGE = 'django.contrib.staticfiles.storage.StaticFilesStorage'
 
 DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 
@@ -220,7 +223,7 @@ if not os.environ.get('RENDER'):
     }
     LOGGING['root']['handlers'].append('file')
 
-    
+
 # Email Configuration
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
