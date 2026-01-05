@@ -76,7 +76,7 @@ class AuthService:
                 first_name=data["first_name"].strip(),
                 last_name=data["last_name"].strip(),
                 role=data["role"],
-                email_verified: True
+                email_verified =  True
             )
 
             # Set optional phone if provided
