@@ -150,17 +150,16 @@ CSRF_TRUSTED_ORIGINS = [
     "https://estore-backend-mtec.onrender.com",
 ]
 
-# CORS_ALLOWED_ORIGINS = [
-#    "https://estore-frontend-boqb.vercel.app/",
+CORS_ALLOWED_ORIGINS = [
+    "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
+    "https://estore-frontend-boqb.vercel.app/"
     
-# ]
-CORS_ALLOW_ALL_ORIGINS = True  
-
+]
 CORS_ALLOW_CREDENTIALS = True
 
 FRONTEND_BASE_URL = config(
     "FRONTEND_BASE_URL",
-    default="https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev/",
+    default="https://estore-frontend-boqb.vercel.app/",
 )
 
 
