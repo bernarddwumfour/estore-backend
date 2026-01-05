@@ -32,7 +32,9 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    "django.contrib.staticfiles",
+    'cloudinary_storage', 
+    'django.contrib.staticfiles',
+    'cloudinary',
     # Third-party
     "corsheaders",
     # Local apps
@@ -145,8 +147,6 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 # SESSION_COOKIE_SECURE = True
 # CSRF_COOKIE_SECURE = True
 # SECURE_SSL_REDIRECT = True
-
-APPEND_SLASH = False 
 
 CSRF_TRUSTED_ORIGINS = [
     "https://estore-backend-mtec.onrender.com",
