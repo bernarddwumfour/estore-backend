@@ -146,6 +146,9 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 # CSRF_COOKIE_SECURE = True
 # SECURE_SSL_REDIRECT = True
 
+CSRF_TRUSTED_ORIGINS = [
+    "https://estore-backend-mtec.onrender.com",
+]
 
 CORS_ALLOWED_ORIGINS = [
     "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
