@@ -176,44 +176,51 @@ JWT_SETTINGS = {
 # LOGGING
 # ------------------------------------------------------------------------------
 
-LOGGING = {
-    'version': 1,
-    'disable_existing_loggers': False,
-    'handlers': {
-        'console': {
-            'class': 'logging.StreamHandler',
-        },
-    },
-    'root': {
-        'handlers': ['console'],
-        'level': 'INFO',
-    },
-}
-
+# LOGGING = {
+#     'version': 1,
+#     'disable_existing_loggers': False,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#     },
+#     'root': {
+#         'handlers': ['console'],
+#         'level': 'INFO',
+#     },
+# }
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+            "style": "{",
+        },
+    },
     "handlers": {
-        "file": {
+        "console": {
             "level": "INFO",
-            "class": "logging.FileHandler",
-            "filename": BASE_DIR / "logs/django.log",
+            "class": "logging.StreamHandler",
+            "formatter": "verbose",
         },
     },
     "root": {
-        "handlers": ["file"],
+        "handlers": ["console"],
         "level": "INFO",
     },
 }
 
-# Only log to file if NOT on Render
+# 2. Only add File Logging if NOT on Render (Local Development)
 if not os.environ.get('RENDER'):
     LOGGING['handlers']['file'] = {
-        'level': 'DEBUG',
-        'class': 'logging.FileHandler',
-        'filename': 'debug.log',
+        "level": "INFO",
+        "class": "logging.FileHandler",
+        "filename": BASE_DIR / "logs/django.log",
     }
+    LOGGING['root']['handlers'].append('file')
 
+    
 # Email Configuration
 SMTP_SERVER = os.getenv("SMTP_SERVER", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
