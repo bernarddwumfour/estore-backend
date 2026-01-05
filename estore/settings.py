@@ -146,6 +146,8 @@ DEFAULT_AUTO_FIELD = "django.db.models.AutoField"
 # CSRF_COOKIE_SECURE = True
 # SECURE_SSL_REDIRECT = True
 
+APPEND_SLASH = False 
+
 CSRF_TRUSTED_ORIGINS = [
     "https://estore-backend-mtec.onrender.com",
 ]
