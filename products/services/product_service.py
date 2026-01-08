@@ -41,10 +41,16 @@ class ProductService:
         # Base queryset - only published products
         queryset = Product.objects.filter(status=Product.STATUS_PUBLISHED)
 
-        # Apply filters
         if category_slug:
-            queryset = queryset.filter(category__slug=category_slug)
-
+            descendant_categories = Category.get_descendants_from_slug(category_slug)
+    
+        if descendant_categories:
+            # Get all descendant category IDs
+            category_ids = [cat.id for cat in descendant_categories]
+            queryset = queryset.filter(category_id__in=category_ids)
+        else:
+            # Category with this slug doesn't exist or is inactive
+            queryset = queryset.none()
         if brand:
             queryset = queryset.filter(variants__attributes__brand=brand).distinct()
 
@@ -934,8 +940,16 @@ class AdminProductService:
                         return None, {
                             f"attributes.{option_key}": f'Option "{option_key}" not allowed for this product'
                         }
+                    
+            default_variant =  ProductVariant.objects.get(product=product,is_default=True)
+            if(default_variant):
+                print("Product has a default variant")
+                if data["is_default"]:
+                    default_variant.is_default = False
+                    default_variant.save()
+            else:
+                data["is_default"] = True
 
-            print("Received data:", data)
 
             # Create variant
             variant = ProductVariant.objects.create(

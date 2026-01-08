@@ -12,42 +12,14 @@ from django.contrib.auth import get_user_model
 
 User = get_user_model()
 
-
 class Category(models.Model):
     """Product categories"""
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    name = models.CharField(_("name"), max_length=100, unique=True)
-    slug = models.SlugField(_("slug"), max_length=100, unique=True)
-    description = models.TextField(_("description"), blank=True)
-    parent = models.ForeignKey(
-        "self", on_delete=models.CASCADE, null=True, blank=True, related_name="children"
-    )
-    image = models.ImageField(
-        _("category image"), upload_to="categories/%Y/%m/", null=True, blank=True
-    )
-
-    # SEO fields
-    meta_title = models.CharField(_("meta title"), max_length=200, blank=True)
-    meta_description = models.TextField(_("meta description"), blank=True)
-
-    is_active = models.BooleanField(_("active"), default=True)
-    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
-    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
-
-    class Meta:
-        db_table = "categories"
-        verbose_name = _("category")
-        verbose_name_plural = _("categories")
-        ordering = ["name"]
-        indexes = [
-            models.Index(fields=["slug"]),
-            models.Index(fields=["is_active"]),
-        ]
-
+    
+    # ... your existing fields ...
+    
     def __str__(self):
         return self.name
-
+    
     @property
     def full_path(self):
         """Get full category path (e.g., Electronics > Audio > Headphones)"""
@@ -57,6 +29,38 @@ class Category(models.Model):
             path.insert(0, parent.name)
             parent = parent.parent
         return " > ".join(path)
+    
+    def get_all_descendants(self):
+        """
+        Get all descendant categories including self.
+        Returns a list of category instances.
+        """
+        descendants = [self]
+        
+        # Recursively get all children
+        for child in self.children.all():
+            descendants.extend(child.get_all_descendants())
+        
+        return descendants
+    
+    def get_descendant_ids(self):
+        """
+        Get all descendant category IDs including self.
+        Returns a list of UUIDs.
+        """
+        return [cat.id for cat in self.get_all_descendants()]
+    
+    @classmethod
+    def get_descendants_from_slug(cls, slug):
+        """
+        Class method to get all descendant categories from a slug.
+        Returns empty list if category not found.
+        """
+        try:
+            category = cls.objects.get(slug=slug, is_active=True)
+            return category.get_all_descendants()
+        except cls.DoesNotExist:
+            return []
 
 
 class Brand(models.Model):
