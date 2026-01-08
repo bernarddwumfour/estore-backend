@@ -38,8 +38,9 @@ class ProductService:
     ) -> Tuple[List[Dict], int, Dict]:
         """Get filtered and paginated products"""
 
-        # Base queryset - only published products
         queryset = Product.objects.filter(status=Product.STATUS_PUBLISHED)
+        
+        descendant_categories= None
 
         if category_slug:
             descendant_categories = Category.get_descendants_from_slug(category_slug)
