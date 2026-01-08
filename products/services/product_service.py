@@ -49,9 +49,8 @@ class ProductService:
             # Get all descendant category IDs
             category_ids = [cat.id for cat in descendant_categories]
             queryset = queryset.filter(category_id__in=category_ids)
-        else:
-            # Category with this slug doesn't exist or is inactive
-            queryset = queryset.none()
+        
+            
         if brand:
             queryset = queryset.filter(variants__attributes__brand=brand).distinct()
 
