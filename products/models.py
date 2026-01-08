@@ -11,12 +11,50 @@ from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth import get_user_model
 
 User = get_user_model()
+import uuid
+from django.db import models
+from django.utils.translation import gettext_lazy as _
+
 
 class Category(models.Model):
     """Product categories"""
-    
-    # ... your existing fields ...
-    
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    name = models.CharField(_("name"), max_length=100, unique=True)
+    slug = models.SlugField(_("slug"), max_length=100, unique=True)
+    description = models.TextField(_("description"), blank=True)
+    parent = models.ForeignKey(
+        "self", 
+        on_delete=models.CASCADE, 
+        null=True, 
+        blank=True, 
+        related_name="children"
+    )
+    image = models.ImageField(
+        _("category image"), 
+        upload_to="categories/%Y/%m/", 
+        null=True, 
+        blank=True
+    )
+
+    # SEO fields
+    meta_title = models.CharField(_("meta title"), max_length=200, blank=True)
+    meta_description = models.TextField(_("meta description"), blank=True)
+
+    is_active = models.BooleanField(_("active"), default=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        db_table = "categories"
+        verbose_name = _("category")
+        verbose_name_plural = _("categories")
+        ordering = ["name"]
+        indexes = [
+            models.Index(fields=["slug"]),
+            models.Index(fields=["is_active"]),
+        ]
+
     def __str__(self):
         return self.name
     
@@ -61,7 +99,6 @@ class Category(models.Model):
             return category.get_all_descendants()
         except cls.DoesNotExist:
             return []
-
 
 class Brand(models.Model):
     """Product brands"""
