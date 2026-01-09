@@ -248,6 +248,8 @@ class AuthService:
             # Update last login
             user.last_login = timezone.now()
             user.save(update_fields=["last_login"])
+            
+            wishlist_variant_ids = list(user.wishlists.values_list('variant__id', flat=True))
 
             # Log login
             ip_address = None
@@ -276,7 +278,9 @@ class AuthService:
                 "tokens": {
                     "access_token": access_token,
                     "refresh_token": refresh_token,
+                    
                 },
+                "wishlists": wishlist_variant_ids
             }
 
             return auth_data, None
