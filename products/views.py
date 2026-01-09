@@ -283,8 +283,8 @@ def wishlist_list(request):
                     }
                 )
 
-            return APIResponse.list_response(
-                items=items_data, total=total, page=page, limit=limit
+            return APIResponse.success(
+                {"items":items_data},"Wishlist Listed Successfully"
             )
 
         elif request.method == "POST":
