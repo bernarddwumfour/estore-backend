@@ -262,26 +262,89 @@ def wishlist_list(request):
             items_data = []
             for item in items:
                 variant = item.variant
+                product = variant.product
                 items_data.append(
-                    {
-                        "id": str(item.id),
-                        "variant": {
-                            "id": str(variant.id),
-                            "sku": variant.sku,
-                            "product_title": variant.product.title,
-                            "product_slug": variant.product.slug,
-                            "price": float(variant.price),
-                            "discounted_price": float(variant.discounted_price),
-                            "stock": variant.stock,
-                            "image": (
-                                variant.images.first().image.url
-                                if variant.images.first()
+                        {
+                            "id": str(product.id),
+                            "title": product.title,
+                            "slug": product.slug,
+                            "description": (
+                                product.description[:200] + "..."
+                                if len(product.description) > 200
+                                else product.description
+                            ),
+                            "category": (
+                                {
+                                    "id": (
+                                        str(product.category.id)
+                                        if product.category
+                                        else None
+                                    ),
+                                    "name": (
+                                        product.category.name
+                                        if product.category
+                                        else None
+                                    ),
+                                    "slug": (
+                                        product.category.slug
+                                        if product.category
+                                        else None
+                                    ),
+                                }
+                                if product.category
                                 else None
                             ),
-                        },
-                        "added_at": item.created_at.isoformat(),
-                    }
-                )
+                            "features": product.features,
+                            "options": product.options,
+                            "min_price": float(product.min_price),
+                            "max_price": float(product.max_price),
+                            "average_rating": float(product.average_rating),
+                            "total_reviews": product.total_reviews,
+                            "total_stock": product.total_stock,
+                            "has_stock": product.has_stock,
+                            "is_featured": product.is_featured,
+                            "is_bestseller": product.is_bestseller,
+                            "is_new": product.is_new,
+                            "default_variant": (
+                                {
+                                    "sku": (
+                                        variant.sku if variant else None
+                                    ),
+                                    "price": (
+                                        float(variant.price)
+                                        if variant
+                                        else None
+                                    ),
+                                    "discounted_price": (
+                                        float(variant.discounted_price)
+                                        if variant
+                                        else None
+                                    ),
+                                    "stock": (
+                                        variant.stock if variant else 0
+                                    ),
+                                    "attributes": (
+                                        variant.attributes
+                                        if variant
+                                        else {}
+                                    ),
+                                    "images": [
+                                        {
+                                            "url": img.image.url,
+                                            "alt_text": img.alt_text,
+                                            "type": img.image_type,
+                                        }
+                                        for img in variant.images.order_by(
+                                            "order"
+                                        )
+                                    ],
+                                }
+                                if variant
+                                else None
+                            ),
+                            "created_at": related_product.created_at.isoformat(),
+                        }
+                    )
 
             return APIResponse.success(
                 {"items":items_data},"Wishlist Listed Successfully"
