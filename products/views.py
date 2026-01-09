@@ -342,7 +342,7 @@ def wishlist_list(request):
                                 if variant
                                 else None
                             ),
-                            "created_at": related_product.created_at.isoformat(),
+                            "created_at": product.created_at.isoformat(),
                         }
                     )
 
