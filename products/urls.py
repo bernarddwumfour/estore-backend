@@ -14,12 +14,19 @@ urlpatterns = [
     path("categories/", views.category_list, name="category-list"),
     path("search/", views.product_search, name="product-search"),
     path("categories/<slug:slug>/", views.category_detail, name="category-detail"),
-    path("<slug:slug>/", views.product_detail, name="product-detail"),
-    path("<slug:slug>/reviews/", views.product_reviews, name="product-reviews"),
+    
+    
+    
     # ==================== AUTHENTICATED USER ENDPOINTS ====================
     path("wishlist/", views.wishlist_list, name="wishlist-list"),
     path("wishlist/<uuid:variant_id>/", views.wishlist_remove, name="wishlist-remove"),
     path("<slug:slug>/reviews/create/", views.create_review, name="create-review"),
+    
+    
+    path("<slug:slug>/", views.product_detail, name="product-detail"),
+    path("<slug:slug>/reviews/", views.product_reviews, name="product-reviews"),
+    
+    
     # ==================== ADMIN ENDPOINTS ====================
     path("admin/products/", views.admin_product_list, name="admin-product-list"),
     path(
