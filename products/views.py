@@ -307,6 +307,9 @@ def wishlist_list(request):
                             "is_new": product.is_new,
                             "default_variant": (
                                 {
+                                    "id": (
+                                        variant.id if variant else None
+                                    ),
                                     "sku": (
                                         variant.sku if variant else None
                                     ),
