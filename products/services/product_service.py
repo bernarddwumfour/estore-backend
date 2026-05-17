@@ -941,14 +941,18 @@ class AdminProductService:
                             f"attributes.{option_key}": f'Option "{option_key}" not allowed for this product'
                         }
                     
-            default_variant =  ProductVariant.objects.get(product=product,is_default=True)
-            if(default_variant):
-                print("Product has a default variant")
-                if data["is_default"]:
-                    default_variant.is_default = False
-                    default_variant.save()
-            else:
+            try:
+                default_variant = ProductVariant.objects.get(product=product, is_default=True)
+                if(default_variant):
+                    if data["is_default"]:
+                        default_variant.is_default = False
+                        default_variant.save()
+            except ProductVariant.DoesNotExist:
+                # No variants exist yet for this product, so this one MUST be the default
                 data["is_default"] = True
+                
+            
+                
 
 
             # Create variant

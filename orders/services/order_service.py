@@ -4,8 +4,7 @@ from django.utils import timezone
 from django.core.exceptions import ValidationError, PermissionDenied
 from decimal import Decimal
 import random
-from typing import List, Dict, Optional, Tuple
-import uuid
+from typing import List, Dict, Tuple
 
 from ..models import Order, OrderItem, ProductVariant, Address
 
@@ -237,7 +236,7 @@ class OrderService:
             if field in normalized:
                 try:
                     normalized[field] = Decimal(str(normalized[field]))
-                except:
+                except :
                     errors.append(f"Invalid value for {field}")
 
         # Add use_separate_billing flag if not present

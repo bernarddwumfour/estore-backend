@@ -7,7 +7,16 @@ import dj_database_url
 from pathlib import Path
 from decouple import config, Csv
 import os
+import environ
 
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+env = environ.Env(
+    DEBUG=(bool, False)
+)
+
+# Read the .env file
+environ.Env.read_env(env_file=str(BASE_DIR / '.env'))
 # ------------------------------------------------------------------------------
 # BASE
 # ------------------------------------------------------------------------------
@@ -21,6 +30,7 @@ SECRET_KEY = config("SECRET_KEY", default="unsafe-dev-secret-key")  # dev only
 DEBUG = config("DEBUG", default=True, cast=bool)
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
+
 
 # ------------------------------------------------------------------------------
 # APPLICATIONS
@@ -107,9 +117,13 @@ TEMPLATES = [
 # core/settings.py
 
 DATABASES = {
-    'default': dj_database_url.parse(os.environ.get('DATABASE_URL'), conn_max_age=600),
+    'default': dj_database_url.config(
+        default=os.environ.get('DATABASE_URL'),
+        conn_max_age=600,
+        conn_health_checks=True,
+        ssl_require=True  # This is the critical line for Neon
+    )
 }
-
 
 
 # ------------------------------------------------------------------------------
@@ -164,7 +178,8 @@ CSRF_TRUSTED_ORIGINS = [
 
 CORS_ALLOWED_ORIGINS = [
     "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
-    "https://estore-frontend-boqb.vercel.app"
+    "https://estore-frontend-boqb.vercel.app",
+    "http://localhost:3000",
     
 ]
 CORS_ALLOW_CREDENTIALS = True
