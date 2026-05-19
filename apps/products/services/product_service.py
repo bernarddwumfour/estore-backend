@@ -272,7 +272,6 @@ class ProductService:
     """Product business logic - read operations using selectors + serializers"""
    
     @staticmethod
-    @staticmethod
     def get_products(
         page: int = 1,
         limit: int = 20,
