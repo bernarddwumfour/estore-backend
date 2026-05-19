@@ -2,13 +2,11 @@
 import json
 from django.http import JsonResponse
 from django.views.decorators.http import (
-    require_http_methods,
     require_POST,
     require_GET,
 )
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth.decorators import login_required
-from orders.services.order_service import AddressService
+from apps.orders.order_service import AddressService
 from users.decorators.auth import json_request_required
 
 
@@ -131,7 +129,7 @@ def delete_address(request, address_id):
     POST /api/addresses/<address_id>/delete/
     """
     try:
-        success = AddressService.delete_address(
+        AddressService.delete_address(
             address_id=address_id, user=request.user
         )
 

@@ -1,11 +1,9 @@
 # models.py
-import decimal
 from django.db import models
-from django.conf import settings
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
-from products.models import ProductVariant
+from apps.products.models import ProductVariant
 from users.models.user import User
 from users.models.address import Address
 from decimal import Decimal
@@ -198,6 +196,26 @@ class Order(models.Model):
     shipped_at = models.DateTimeField(_("shipped at"), null=True, blank=True)
     delivered_at = models.DateTimeField(_("delivered at"), null=True, blank=True)
     cancelled_at = models.DateTimeField(_("cancelled at"), null=True, blank=True)
+    
+    pod_eligible = models.BooleanField(_("pay on delivery eligible"), default=False)
+    pod_reason = models.CharField(_("POD ineligible reason"), max_length=255, blank=True)
+    
+    # Payment method type (for tracking)
+    PAYMENT_TYPE_ONLINE = 'online'
+    PAYMENT_TYPE_POD = 'pod'
+    
+    PAYMENT_TYPE_CHOICES = [
+        (PAYMENT_TYPE_ONLINE, 'Online Payment'),
+        (PAYMENT_TYPE_POD, 'Pay on Delivery'),
+    ]
+    
+    payment_type = models.CharField(
+        _("payment type"),
+        max_length=20,
+        choices=PAYMENT_TYPE_CHOICES,
+        default=PAYMENT_TYPE_ONLINE,
+    )
+
 
     class Meta:
         db_table = "orders"
@@ -292,7 +310,8 @@ class OrderItem(models.Model):
     total_price = models.DecimalField(
         _("total price"), max_digits=10, decimal_places=2, default=0.00
     )
-
+    
+   
     class Meta:
         db_table = "order_items"
         verbose_name = _("order item")
@@ -329,6 +348,7 @@ class OrderItem(models.Model):
             if not isinstance(self.quantity, (Decimal, int))
             else Decimal(str(self.quantity))
         )
+        
 
         self.total_price = (unit_price - discount) * quantity
 

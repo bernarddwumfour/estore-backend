@@ -4,11 +4,7 @@ users/utils/responses.py
 Standardized HTTP responses for consistent API behavior
 """
 
-import json
-from datetime import datetime
 from django.http import JsonResponse
-from django.utils import timezone
-import uuid
 
 
 class APIResponse:
@@ -30,7 +26,6 @@ class APIResponse:
             "errors": errors or {},
         }
 
-        # Remove empty fields
         if not response["data"]:
             del response["data"]
         if not response["errors"]:

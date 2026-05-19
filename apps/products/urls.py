@@ -14,18 +14,12 @@ urlpatterns = [
     path("categories/", views.category_list, name="category-list"),
     path("search/", views.product_search, name="product-search"),
     path("categories/<slug:slug>/", views.category_detail, name="category-detail"),
-    
-    
-    
     # ==================== AUTHENTICATED USER ENDPOINTS ====================
     path("wishlist/", views.wishlist_list, name="wishlist-list"),
     path("wishlist/<uuid:variant_id>/", views.wishlist_remove, name="wishlist-remove"),
     path("<slug:slug>/reviews/create/", views.create_review, name="create-review"),
-    
-    
     path("<slug:slug>/", views.product_detail, name="product-detail"),
     path("<slug:slug>/reviews/", views.product_reviews, name="product-reviews"),
-    
     
     # ==================== ADMIN ENDPOINTS ====================
     path("admin/products/", views.admin_product_list, name="admin-product-list"),
@@ -45,6 +39,11 @@ urlpatterns = [
         name="admin-product-update",
     ),
     path(
+        "admin/products/bulk-action/",
+        views.admin_product_bulk_action,
+        name="admin-product-bulk-action",
+    ),
+    path(
         "admin/products/<uuid:product_id>/variants/",
         views.admin_variant_create,
         name="admin-variant-create",
@@ -59,6 +58,16 @@ urlpatterns = [
         views.admin_variant_image_upload,
         name="admin-variant-image-upload",
     ),
+    path(
+        "admin/variants/<uuid:variant_id>/",
+        views.admin_variant_detail,
+        name="admin-variant-detail",
+    ),
+    path(
+        "admin/variants/<uuid:variant_id>/delete/",
+        views.admin_variant_delete,
+        name="admin-variant-delete",
+    ),
     path("admin/categories/", views.admin_category_list, name="admin-category-list"),
     path(
         "admin/categories/create/",
@@ -66,8 +75,28 @@ urlpatterns = [
         name="admin-category-create",
     ),
     path(
+        "admin/categories/<uuid:category_id>/update/",
+        views.admin_category_update,
+        name="admin-category-update",
+    ),
+    path(
         "admin/categories/<uuid:category_id>/",
-        views.admin_category_update_delete,
-        name="dmin-category-update-delete",
+        views.admin_category_detail,
+        name="admin-category-details",
+    ),
+    path(
+        "admin/categories/<uuid:category_id>/delete/",
+        views.admin_category_delete,
+        name="admin-category-delete",
+    ),
+    path(
+        "admin/analytics/",
+        views.product_analytics,
+        name="admin-product-analytics",
+    ),
+    path(
+        "admin/categories/bulk-action/",
+        views.admin_category_bulk_action,
+        name="admin-category-bulk-action",
     ),
 ]

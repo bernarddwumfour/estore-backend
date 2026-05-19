@@ -32,7 +32,15 @@ DEBUG = config("DEBUG", default=True, cast=bool)
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 
 
-# ------------------------------------------------------------------------------
+PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
+PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '')
+PAYSTACK_BASE_URL = 'https://api.paystack.co'  # Production URL (same for test keys)
+
+PAYSTACK_WEBHOOK_SECRET = os.environ.get('PAYSTACK_WEBHOOK_SECRET', '')
+
+PAYSTACK_CALLBACK_URL = os.environ.get('PAYSTACK_CALLBACK_URL', 'http://localhost:3000/orders/callback')
+PAYMENT_SUCCESS_URL = os.environ.get('PAYMENT_SUCCESS_URL', 'http://localhost:3000/orders/success')
+PAYMENT_CANCEL_URL = os.environ.get('PAYMENT_CANCEL_URL', 'http://localhost:3000/orders/cancel')
 # APPLICATIONS
 # ------------------------------------------------------------------------------
 INSTALLED_APPS = [
@@ -49,8 +57,8 @@ INSTALLED_APPS = [
     "corsheaders",
     # Local apps
     "users",
-    "products",
-    "orders",
+    "apps.products",
+    "apps.orders",
     "api",
 ]
 

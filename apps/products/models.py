@@ -33,6 +33,12 @@ class Category(models.Model):
         null=True, 
         blank=True
     )
+    
+    is_hidden = models.BooleanField(
+        _("hidden"), 
+        default=False,
+        help_text=_("Hide this category from customers (only visible to admins)")
+    )
 
     # SEO fields
     meta_title = models.CharField(_("meta title"), max_length=200, blank=True)
