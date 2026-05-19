@@ -7,16 +7,12 @@ import dj_database_url
 from pathlib import Path
 from decouple import config, Csv
 import os
-import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-env = environ.Env(
-    DEBUG=(bool, False)
-)
+
 
 # Read the .env file
-environ.Env.read_env(env_file=str(BASE_DIR / '.env'))
 # ------------------------------------------------------------------------------
 # BASE
 # ------------------------------------------------------------------------------
