@@ -63,6 +63,7 @@ def serialize_order_item(item, is_admin: bool = False) -> Dict:
     }
 
 
+
 def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dict:
     """Serialize order model"""
     data = {
@@ -83,11 +84,18 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
         "currency": order.currency,
         "item_count": order.item_count,
         "shipping_method": order.shipping_method,
-        "carrier": order.carrier,
         "customer_note": order.customer_note,
         "created_at": order.created_at.isoformat(),
         "updated_at": order.updated_at.isoformat(),
     }
+    
+    # Add carrier and tracking from shipment if exists
+    if hasattr(order, 'shipment') and order.shipment:
+        data["carrier"] = order.shipment.carrier
+        data["tracking_number"] = order.shipment.tracking_number
+    else:
+        data["carrier"] = None
+        data["tracking_number"] = None
     
     if is_admin:
         data.update({
@@ -108,12 +116,11 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
             "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
         })
     
-    # Addresses (always include for admin, limited for users)
+    # Addresses
     if is_admin or detailed:
         data["shipping_address"] = serialize_address(order.shipping_address, is_admin)
         data["billing_address"] = serialize_address(order.billing_address, is_admin)
     else:
-        # Limited address info for users
         if order.shipping_address:
             data["shipping_address"] = {
                 "city": order.shipping_address.city,
@@ -125,6 +132,8 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
         data["items"] = [serialize_order_item(item, is_admin) for item in order.items.all()]
     
     return data
+
+
 
 
 def serialize_order_list(orders, is_admin: bool = False) -> List[Dict]:
@@ -554,3 +563,46 @@ def validate_refund_request(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optio
         return None, errors
     
     return cleaned, None
+
+
+def serialize_pagination_metadata(pagination_meta: Dict) -> Dict:
+    """Serialize pagination metadata for API response"""
+    return {
+        "current_page": pagination_meta["current_page"],
+        "per_page": pagination_meta["per_page"],
+        "total": pagination_meta["total"],
+        "total_pages": pagination_meta["total_pages"],
+        "has_next": pagination_meta["has_next"],
+        "has_previous": pagination_meta["has_previous"],
+        "next_page": pagination_meta["next_page"],
+        "previous_page": pagination_meta["previous_page"],
+        "start_index": pagination_meta["start_index"],
+        "end_index": pagination_meta["end_index"],
+    }
+
+
+def serialize_shipment_list(shipments: List, is_admin: bool = False) -> List[Dict]:
+    """Serialize list of shipments for list view"""
+    return [
+        {
+            "id": str(s.id),
+            "order_number": s.order.order_number,
+            "order_id": str(s.order.id),
+            "customer_name": s.order.customer_name,
+            "customer_email": s.order.customer_email,
+            "status": s.status,
+            "status_display": s.get_status_display(),
+            "tracking_number": s.tracking_number,
+            "carrier": s.carrier,
+            "created_at": s.created_at.isoformat(),
+            "shipped_at": s.shipped_at.isoformat() if s.shipped_at else None,
+            "delivered_at": s.delivered_at.isoformat() if s.delivered_at else None,
+            "estimated_delivery": s.estimated_delivery.isoformat() if s.estimated_delivery else None,
+        }
+        for s in shipments
+    ]
+
+
+def serialize_transaction_list(transactions: List, is_admin: bool = False) -> List[Dict]:
+    """Serialize list of transactions for list view"""
+    return [serialize_transaction(t, is_admin=is_admin) for t in transactions]

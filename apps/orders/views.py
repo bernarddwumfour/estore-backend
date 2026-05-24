@@ -12,12 +12,10 @@ from estore.utils.responses import APIResponse
 from decimal import Decimal
 
 from django.conf import settings
-from django.db.models import Q, Sum
 
 from apps.orders.selectors import (
-    get_user_orders, get_admin_orders, get_order_statistics,
+    get_user_orders, get_order_statistics,
     get_order_by_id, get_order_transactions, get_refundable_amount,
-    get_orders_by_shipment_status
 )
 from apps.orders.schemas import (
     serialize_order, serialize_order_list, serialize_order_item, serialize_address,
@@ -518,46 +516,75 @@ def payment_callback(request):
         return APIResponse.server_error()
 
 # ==================== ADMIN ORDER VIEWS ====================
-
-
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
 def admin_order_list(request):
-    """Admin: List all orders"""
+    """Admin: List all orders with filtering, sorting, and pagination"""
     try:
+        # Get pagination parameters
         page = int(request.GET.get("page", 1))
         limit = min(int(request.GET.get("limit", 20)), 100)
+        
+        # Get filter parameters
+        search = request.GET.get("search", "").strip()
         status = request.GET.get("status")
         payment_status = request.GET.get("payment_status")
-        search = request.GET.get("search", "").strip()
+        payment_method = request.GET.get("payment_method")
         date_from = request.GET.get("date_from")
         date_to = request.GET.get("date_to")
-
-        orders, total = get_admin_orders(
+        min_total = request.GET.get("min_total")
+        max_total = request.GET.get("max_total")
+        
+        # Get sorting parameters
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
+        
+        # Convert numeric parameters
+        min_total_float = float(min_total) if min_total else None
+        max_total_float = float(max_total) if max_total else None
+        
+        # Get filtered orders
+        from apps.orders.selectors import get_admin_orders_filtered
+        
+        orders, total, pagination_meta = get_admin_orders_filtered(
             page=page,
             limit=limit,
-            status=status,
-            payment_status=payment_status,
-            search=search,
-            date_from=date_from,
-            date_to=date_to,
+            search=search if search else None,
+            status=status if status else None,
+            payment_status=payment_status if payment_status else None,
+            payment_method=payment_method if payment_method else None,
+            date_from=date_from if date_from else None,
+            date_to=date_to if date_to else None,
+            min_total=min_total_float,
+            max_total=max_total_float,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
-
+        
+        from apps.orders.schemas import serialize_pagination_metadata
+        
         return APIResponse.success(
             data={
                 "orders": serialize_order_list(orders, is_admin=True),
                 "total": total,
-                "page": page,
-                "limit": limit,
+                "pagination": serialize_pagination_metadata(pagination_meta)
             },
-            message="Orders retrieved successfully",
+            message="Orders retrieved successfully"
         )
-
+        
+    except ValueError as e:
+        logger.error(f"Invalid parameter: {str(e)}")
+        return APIResponse.bad_request(f"Invalid parameter: {str(e)}")
     except Exception as e:
         logger.error(f"Admin order list error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return APIResponse.server_error()
+
+
+
 
 
 @csrf_exempt
@@ -1185,60 +1212,63 @@ def admin_update_shipment_status(request, shipment_id):
         return APIResponse.server_error()
 
 
+
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
 def admin_shipments_list(request):
-    """Admin: List all shipments with filtering"""
-    
+    """Admin: List all shipments with filtering, sorting, and pagination"""
     try:
+        # Get pagination parameters
         page = int(request.GET.get("page", 1))
         limit = min(int(request.GET.get("limit", 20)), 100)
-        status = request.GET.get("status")
-        search = request.GET.get("search", "").strip()
-        # date_from = request.GET.get("date_from")
-        # date_to = request.GET.get("date_to")
         
-        orders, total = get_orders_by_shipment_status(
-            status=status,
+        # Get filter parameters
+        search = request.GET.get("search", "").strip()
+        status = request.GET.get("status")
+        carrier = request.GET.get("carrier")
+        date_from = request.GET.get("date_from")
+        date_to = request.GET.get("date_to")
+        
+        # Get sorting parameters
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
+        
+        # Get filtered shipments
+        from apps.orders.selectors import get_shipments_filtered
+        from apps.orders.schemas import serialize_pagination_metadata, serialize_shipment_list
+        
+        shipments, total, pagination_meta = get_shipments_filtered(
             page=page,
             limit=limit,
-            search=search,
+            search=search if search else None,
+            status=status if status else None,
+            carrier=carrier if carrier else None,
+            date_from=date_from if date_from else None,
+            date_to=date_to if date_to else None,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         
-        shipments_data = []
-        for order in orders:
-            if hasattr(order, 'shipment'):
-                shipment = order.shipment
-                shipments_data.append({
-                    "id": str(shipment.id),
-                    "order_number": order.order_number,
-                    "order_id": order.id,
-                    "customer_name": order.customer_name,
-                    "status": shipment.status,
-                    "status_display": shipment.get_status_display(),
-                    "tracking_number": shipment.tracking_number,
-                    "carrier": shipment.carrier,
-                    "created_at": shipment.created_at.isoformat(),
-                    "shipped_at": shipment.shipped_at.isoformat() if shipment.shipped_at else None,
-                    "delivered_at": shipment.delivered_at.isoformat() if shipment.delivered_at else None,
-                    "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
-                })
+        shipments_data = serialize_shipment_list(shipments, is_admin=True)
         
         return APIResponse.success(
             data={
                 "shipments": shipments_data,
                 "total": total,
-                "page": page,
-                "limit": limit,
+                "pagination": serialize_pagination_metadata(pagination_meta)
             },
             message="Shipments retrieved successfully"
         )
         
     except Exception as e:
         logger.error(f"Admin shipments list error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return APIResponse.server_error()
+
+
 
 
 @csrf_exempt
@@ -1465,60 +1495,76 @@ def admin_process_refund(request, order_id):
         return APIResponse.server_error()
 
 
+
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
 def admin_transactions_list(request):
-    """Admin: List all transactions with filtering"""
+    """Admin: List all transactions with filtering, sorting, and pagination"""
     try:
+        # Get pagination parameters
         page = int(request.GET.get("page", 1))
         limit = min(int(request.GET.get("limit", 20)), 100)
+        
+        # Get filter parameters
+        search = request.GET.get("search", "").strip()
         transaction_type = request.GET.get("type")
         status = request.GET.get("status")
-        search = request.GET.get("search", "").strip()
+        payment_method = request.GET.get("payment_method")
         date_from = request.GET.get("date_from")
         date_to = request.GET.get("date_to")
+        min_amount = request.GET.get("min_amount")
+        max_amount = request.GET.get("max_amount")
         
-        queryset = Transaction.objects.all().select_related('order')
+        # Get sorting parameters
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
         
-        if transaction_type:
-            queryset = queryset.filter(transaction_type=transaction_type)
-        if status:
-            queryset = queryset.filter(status=status)
-        if search:
-            queryset = queryset.filter(
-                Q(transaction_id__icontains=search) |
-                Q(reference__icontains=search) |
-                Q(order__order_number__icontains=search) |
-                Q(order__customer_email__icontains=search)
-            )
-        if date_from:
-            queryset = queryset.filter(created_at__date__gte=date_from)
-        if date_to:
-            queryset = queryset.filter(created_at__date__lte=date_to)
+        # Convert numeric parameters
+        min_amount_float = float(min_amount) if min_amount else None
+        max_amount_float = float(max_amount) if max_amount else None
         
-        total = queryset.count()
-        offset = (page - 1) * limit
-        transactions = list(queryset.order_by('-created_at')[offset:offset + limit])
+        # Get filtered transactions
+        from apps.orders.selectors import get_transactions_filtered
+        from apps.orders.schemas import serialize_pagination_metadata, serialize_transaction_list
         
-        from apps.orders.schemas import serialize_transaction
-        transactions_data = [serialize_transaction(t, is_admin=True) for t in transactions]
+        transactions, total, pagination_meta = get_transactions_filtered(
+            page=page,
+            limit=limit,
+            search=search if search else None,
+            transaction_type=transaction_type if transaction_type else None,
+            status=status if status else None,
+            payment_method=payment_method if payment_method else None,
+            date_from=date_from if date_from else None,
+            date_to=date_to if date_to else None,
+            min_amount=min_amount_float,
+            max_amount=max_amount_float,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+        
+        transactions_data = serialize_transaction_list(transactions, is_admin=True)
         
         # Summary stats
+        from django.db.models import Sum
+        from apps.orders.models import Transaction
+        
         stats = {
             "total_charges": float(Transaction.objects.filter(transaction_type='charge', status='success').aggregate(total=Sum('amount'))['total'] or 0),
             "total_refunds": float(Transaction.objects.filter(transaction_type='refund', status='success').aggregate(total=Sum('amount'))['total'] or 0),
             "net_revenue": float(Transaction.objects.filter(transaction_type='charge', status='success').aggregate(total=Sum('amount'))['total'] or 0) - 
                           float(Transaction.objects.filter(transaction_type='refund', status='success').aggregate(total=Sum('amount'))['total'] or 0),
+            "successful_count": Transaction.objects.filter(status='success').count(),
+            "failed_count": Transaction.objects.filter(status='failed').count(),
+            "pending_count": Transaction.objects.filter(status='pending').count(),
         }
         
         return APIResponse.success(
             data={
                 "transactions": transactions_data,
                 "total": total,
-                "page": page,
-                "limit": limit,
+                "pagination": serialize_pagination_metadata(pagination_meta),
                 "stats": stats,
             },
             message="Transactions retrieved successfully"
@@ -1526,7 +1572,11 @@ def admin_transactions_list(request):
         
     except Exception as e:
         logger.error(f"Admin transactions list error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return APIResponse.server_error()
+
+
 
 
 @csrf_exempt
