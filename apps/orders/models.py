@@ -4,10 +4,10 @@ from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 import uuid
 from apps.products.models import ProductVariant
-from users.models.user import User
-from users.models.address import Address
+from apps.users.models.user import User
+from apps.users.models.address import Address
 from decimal import Decimal
-
+from django.utils import timezone
 
 class Order(models.Model):
     """
@@ -174,7 +174,7 @@ class Order(models.Model):
 
     # tracking_number = models.CharField(_("tracking number"), max_length=100, blank=True)
 
-    carrier = models.CharField(_("carrier"), max_length=100, blank=True)
+    # carrier = models.CharField(_("carrier"), max_length=100, blank=True)
 
     payment_intent_id = models.CharField(
         _("payment intent id"), max_length=100, blank=True
@@ -229,6 +229,20 @@ class Order(models.Model):
             models.Index(fields=["user", "created_at"]),
             models.Index(fields=["guest_email"]),
         ]
+        
+    @property
+    def tracking_number(self):
+        """Get tracking number from shipment if exists"""
+        if hasattr(self, 'shipment') and self.shipment:
+            return self.shipment.tracking_number
+        return None
+    
+    @property
+    def carrier(self):
+        """Get carrier from shipment if exists"""
+        if hasattr(self, 'shipment') and self.shipment:
+            return self.shipment.carrier
+        return None
 
     def __str__(self):
         return f"Order #{self.order_number}"
@@ -369,3 +383,184 @@ class OrderItem(models.Model):
             else self.discount_amount
         )
         return unit_price - discount
+
+
+class Shipment(models.Model):
+    """
+    Shipment model - created when order is shipped
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name="shipment")
+    
+    # Shipping statuses only
+    STATUS_SHIPPED = "shipped"
+    STATUS_DELIVERED = "delivered"
+    STATUS_CANCELLED = "cancelled"
+    STATUS_REFUNDED = "refunded"
+    
+    STATUS_CHOICES = [
+        (STATUS_SHIPPED, "Shipped"),
+        (STATUS_DELIVERED, "Delivered"),
+        (STATUS_CANCELLED, "Cancelled"),
+        (STATUS_REFUNDED, "Refunded"),
+    ]
+    
+    status = models.CharField(_("status"), max_length=20, choices=STATUS_CHOICES, default=STATUS_SHIPPED, db_index=True)
+    
+    # Tracking information
+    tracking_number = models.CharField(_("tracking number"), max_length=100, blank=True,null=True)
+    carrier = models.CharField(_("carrier"), max_length=100, blank=True,null=True, default='')
+    tracking_url = models.URLField(_("tracking URL"), blank=True,default='')
+    
+    # Shipping details
+    weight = models.DecimalField(_("weight (kg)"), max_digits=8, decimal_places=2, null=True, blank=True)
+    
+    # Dates
+    shipped_at = models.DateTimeField(_("shipped at"), auto_now_add=True)
+    delivered_at = models.DateTimeField(_("delivered at"), null=True, blank=True)
+    estimated_delivery = models.DateTimeField(_("estimated delivery"), null=True, blank=True)
+    
+    # Notes
+    notes = models.TextField(_("notes"), blank=True)
+    
+    # Who created/updated
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="created_shipments")
+    updated_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="updated_shipments")
+    
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+    
+    class Meta:
+        db_table = "shipments"
+        verbose_name = _("shipment")
+        verbose_name_plural = _("shipments")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["order", "status"]),
+            models.Index(fields=["tracking_number"]),
+            models.Index(fields=["carrier"]),
+        ]
+    
+    def __str__(self):
+        return f"Shipment for {self.order.order_number}"
+    
+    def save(self, *args, **kwargs):
+        """Update order status when shipment is created/updated"""
+        is_new = self.pk is None
+        
+        # Set shipped_at for new shipments
+        if is_new and not self.shipped_at:
+            self.shipped_at = timezone.now()
+        
+        # Update order status
+        if self.status == self.STATUS_SHIPPED and self.order.status != Order.STATUS_SHIPPED:
+            self.order.status = Order.STATUS_SHIPPED
+            self.order.shipped_at = self.shipped_at
+            self.order.save()
+        elif self.status == self.STATUS_DELIVERED and self.order.status != Order.STATUS_DELIVERED:
+            self.order.status = Order.STATUS_DELIVERED
+            self.order.delivered_at = self.delivered_at or timezone.now()
+            self.order.save()
+        elif self.status == self.STATUS_CANCELLED and self.order.status != Order.STATUS_CANCELLED:
+            self.order.status = Order.STATUS_CANCELLED
+            self.order.cancelled_at = timezone.now()
+            self.order.save()
+        elif self.status == self.STATUS_REFUNDED and self.order.payment_status != Order.PAYMENT_REFUNDED:
+            self.order.payment_status = Order.PAYMENT_REFUNDED
+            self.order.status = Order.STATUS_REFUNDED
+            self.order.save()
+        
+        super().save(*args, **kwargs)
+
+
+class ShipmentTracking(models.Model):
+    """
+    Track shipment status changes
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    shipment = models.ForeignKey(Shipment, on_delete=models.CASCADE, related_name="tracking_history")
+    
+    status = models.CharField(_("status"), max_length=20, choices=Shipment.STATUS_CHOICES)
+    location = models.CharField(_("location"), max_length=255, blank=True)
+    description = models.TextField(_("description"), blank=True)
+    
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name="tracking_updates")
+    
+    class Meta:
+        db_table = "shipment_tracking"
+        verbose_name = _("shipment tracking")
+        verbose_name_plural = _("shipment tracking")
+        ordering = ["-created_at"]
+
+class Transaction(models.Model):
+    """
+    Record all payment transactions (charges and refunds)
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(Order, on_delete=models.CASCADE, related_name="transactions")
+    
+    TRANSACTION_TYPE_CHARGE = 'charge'
+    TRANSACTION_TYPE_REFUND = 'refund'
+    TRANSACTION_TYPE_AUTHORIZATION = 'authorization'
+    TRANSACTION_TYPE_SHIPPING = 'shipping'
+    
+    TRANSACTION_TYPE_CHOICES = [
+        (TRANSACTION_TYPE_CHARGE, "Charge"),
+        (TRANSACTION_TYPE_REFUND, "Refund"),
+        (TRANSACTION_TYPE_AUTHORIZATION, "Authorization"),
+        (TRANSACTION_TYPE_SHIPPING, "Shipping"),
+    ]
+    
+    TRANSACTION_STATUS_PENDING = 'pending'
+    TRANSACTION_STATUS_SUCCESS = 'success'
+    TRANSACTION_STATUS_FAILED = 'failed'
+    TRANSACTION_STATUS_REFUNDED = 'refunded'
+    
+    TRANSACTION_STATUS_CHOICES = [
+        (TRANSACTION_STATUS_PENDING, "Pending"),
+        (TRANSACTION_STATUS_SUCCESS, "Success"),
+        (TRANSACTION_STATUS_FAILED, "Failed"),
+        (TRANSACTION_STATUS_REFUNDED, "Refunded"),
+    ]
+    
+    transaction_type = models.CharField(_("transaction type"), max_length=20, choices=TRANSACTION_TYPE_CHOICES)
+    transaction_id = models.CharField(_("transaction ID"), max_length=255, unique=True, db_index=True)
+    reference = models.CharField(_("reference"), max_length=255, blank=True)
+    
+    amount = models.DecimalField(_("amount"), max_digits=10, decimal_places=2)
+    currency = models.CharField(_("currency"), max_length=3, default="USD")
+    
+    status = models.CharField(_("status"), max_length=20, choices=TRANSACTION_STATUS_CHOICES, default=TRANSACTION_STATUS_PENDING)
+    
+    payment_method = models.CharField(_("payment method"), max_length=50, blank=True)
+    card_last4 = models.CharField(_("card last 4"), max_length=4, blank=True)
+    card_brand = models.CharField(_("card brand"), max_length=20, blank=True)
+    
+    metadata = models.JSONField(_("metadata"), default=dict, blank=True)
+    
+    # For refunds
+    parent_transaction = models.ForeignKey('self', on_delete=models.SET_NULL, null=True, blank=True, related_name="refunds")
+    refund_reason = models.TextField(_("refund reason"), blank=True)
+    
+    notes = models.TextField(_("notes"), blank=True)
+    
+    receipt_url = models.URLField(_("receipt URL"), max_length=500, blank=True)
+    
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    completed_at = models.DateTimeField(_("completed at"), null=True, blank=True)
+    
+    class Meta:
+        db_table = "transactions"
+        verbose_name = _("transaction")
+        verbose_name_plural = _("transactions")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["transaction_id"]),
+            models.Index(fields=["reference"]),
+            models.Index(fields=["order", "status"]),
+            models.Index(fields=["created_at"]),
+        ]
+    
+    def __str__(self):
+        return f"{self.transaction_type} - {self.transaction_id} - {self.amount}"

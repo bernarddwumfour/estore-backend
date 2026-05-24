@@ -1,6 +1,6 @@
-"""
-users/models/user.py
+# apps/users/models/user.py
 
+"""
 ULTIMATE LEAN User model - authentication only
 Everything else moved to related models
 """
@@ -38,7 +38,7 @@ class User(AbstractUser):
     username = models.CharField(
         _("username"),
         max_length=150,
-        unique=False,  # Not unique
+        unique=False,
         blank=True,
         null=True,
     )
@@ -56,12 +56,24 @@ class User(AbstractUser):
     )
 
     email_verified = models.BooleanField(_("email verified"), default=False)
-
     email_verified_at = models.DateTimeField(
         _("email verified at"), null=True, blank=True, db_index=True
     )
 
-    # Add this property method to your User class:
+    is_active = models.BooleanField(_("active"), default=True, db_index=True)
+
+    # Guest status
+    is_guest = models.BooleanField(
+        _("guest"),
+        default=False,
+        db_index=True,
+        help_text=_("Designates whether the user is a guest (no password set)."),
+    )
+
+    # Timestamps
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
     @property
     def is_verified(self):
         """Alias for email_verified for compatibility"""
@@ -72,31 +84,6 @@ class User(AbstractUser):
         self.email_verified = True
         self.email_verified_at = timezone.now()
         self.save()
-
-    is_active = models.BooleanField(_("active"), default=True, db_index=True)
-
-    # Timestamps
-    created_at = models.DateTimeField(_("created at"), auto_now_add=True, db_index=True)
-    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
-
-    # Manager
-    objects = UserManager()
-
-    USERNAME_FIELD = "email"
-    REQUIRED_FIELDS = []  # No required fields except email
-
-    class Meta:
-        db_table = "users"
-        verbose_name = _("user")
-        verbose_name_plural = _("users")
-        ordering = ["-created_at"]
-        indexes = [
-            models.Index(fields=["email"]),
-            models.Index(fields=["role", "is_active"]),
-        ]
-
-    def __str__(self):
-        return self.email
 
     @property
     def full_name(self):
@@ -116,6 +103,43 @@ class User(AbstractUser):
 
     def can_access_admin(self):
         return self.is_admin() or (self.is_staff_member() and self.is_staff)
+
+    def save(self, *args, **kwargs):
+        """Auto-update is_guest based on password status"""
+        if self.pk:
+            old_user = User.objects.filter(pk=self.pk).first()
+            if old_user:
+                old_has_password = old_user.has_usable_password()
+                new_has_password = self.has_usable_password()
+                
+                if old_has_password != new_has_password:
+                    self.is_guest = not new_has_password
+        else:
+            # New user without password is a guest
+            if not self.has_usable_password():
+                self.is_guest = True
+        
+        super().save(*args, **kwargs)
+
+    # Manager
+    objects = UserManager()
+
+    USERNAME_FIELD = "email"
+    REQUIRED_FIELDS = []
+
+    class Meta:
+        db_table = "users"
+        verbose_name = _("user")
+        verbose_name_plural = _("users")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["role", "is_active"]),
+            models.Index(fields=["is_guest"]),
+        ]
+
+    def __str__(self):
+        return self.email
 
 
 class PasswordResetToken(models.Model):

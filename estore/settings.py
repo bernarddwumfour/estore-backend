@@ -7,20 +7,14 @@ import dj_database_url
 from pathlib import Path
 from decouple import config, Csv
 import os
+import environ
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+env = environ.Env()
 
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
-# Read the .env file
-# ------------------------------------------------------------------------------
-# BASE
-# ------------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent.parent
-
-# ------------------------------------------------------------------------------
-# SECURITY
-# ------------------------------------------------------------------------------
 SECRET_KEY = config("SECRET_KEY", default="unsafe-dev-secret-key")  # dev only
 
 DEBUG = config("DEBUG", default=True, cast=bool)
@@ -38,6 +32,22 @@ PAYSTACK_CALLBACK_URL = os.environ.get('PAYSTACK_CALLBACK_URL', 'http://localhos
 PAYMENT_SUCCESS_URL = os.environ.get('PAYMENT_SUCCESS_URL', 'http://localhost:3000/orders/success')
 PAYMENT_CANCEL_URL = os.environ.get('PAYMENT_CANCEL_URL', 'http://localhost:3000/orders/cancel')
 # APPLICATIONS
+
+TERMINAL_AFRICA_API_KEY = os.environ.get('TERMINAL_AFRICA_API_KEY', '')
+TERMINAL_AFRICA_BASE_URL = os.environ.get('TERMINAL_AFRICA_BASE_URL', 'https://api.terminal.africa/v1')
+TERMINAL_AFRICA_WEBHOOK_SECRET = os.environ.get('TERMINAL_AFRICA_WEBHOOK_SECRET', '')
+
+# Enable/disable real-time shipping rates
+ENABLE_REAL_TIME_SHIPPING_RATES = os.environ.get('ENABLE_REAL_TIME_SHIPPING_RATES', 'True') == 'True'
+
+# Default shipping origin (warehouse address)
+DEFAULT_SHIPPING_ORIGIN = {
+    "country": "GH",
+    "state": "Greater Accra",
+    "city": "Accra",
+    "postal_code": "00233",
+    "address": "Your Warehouse Address, Accra, Ghana",
+}
 # ------------------------------------------------------------------------------
 INSTALLED_APPS = [
     # Django
@@ -52,7 +62,7 @@ INSTALLED_APPS = [
     # Third-party
     "corsheaders",
     # Local apps
-    "users",
+    "apps.users",
     "apps.products",
     "apps.orders",
     "api",
@@ -286,3 +296,4 @@ MEDIA_URL = "/media/"
 
 # Absolute filesystem path to the directory that will hold user-uploaded files
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
+APPEND_SLASH = False

@@ -2,7 +2,9 @@
 from decimal import Decimal
 from typing import Dict, Any, Tuple, Optional, List
 from django.core.validators import validate_email
-from decimal import  DecimalException
+from .models import Shipment
+
+from django.core.exceptions import ValidationError
 
 
 # ==================== OUTPUT SERIALIZERS ====================
@@ -130,8 +132,6 @@ def serialize_order_list(orders, is_admin: bool = False) -> List[Dict]:
     return [serialize_order(order, is_admin, detailed=False) for order in orders]
 
 
-# ==================== INPUT VALIDATORS ====================
-
 def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate order creation data"""
     errors = {}
@@ -178,22 +178,41 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
         if not shipping_address.get(field):
             errors[f'shipping_address.{field}'] = f"{field.replace('_', ' ').title()} is required"
     
-    if not errors:
+    # Validate email format in shipping address
+    if shipping_address.get('email') and not errors.get(f'shipping_address.email'):
+        try:
+            validate_email(shipping_address['email'])
+        except ValidationError:
+            errors['shipping_address.email'] = "Invalid email address"
+    
+    if not errors.get('shipping_address') and 'shipping_address' not in errors:
         cleaned['shipping_address'] = shipping_address
     
     # ==================== VALIDATE BILLING ADDRESS (optional) ====================
-    if 'billing_address' in data and data['billing_address']:
-        billing_address = data['billing_address']
-        for field in required_address_fields:
-            if not billing_address.get(field):
-                errors[f'billing_address.{field}'] = f"{field.replace('_', ' ').title()} is required"
-        
-        if not errors and 'billing_address' not in errors:
-            cleaned['billing_address'] = billing_address
+    use_separate_billing = data.get('use_separate_billing', False)
+    
+    if use_separate_billing:
+        billing_address = data.get('billing_address', {})
+        if not billing_address:
+            errors['billing_address'] = "Billing address is required when separate billing is enabled"
+        else:
+            for field in required_address_fields:
+                if not billing_address.get(field):
+                    errors[f'billing_address.{field}'] = f"{field.replace('_', ' ').title()} is required"
+            
+            # Validate email format in billing address
+            if billing_address.get('email') and not errors.get(f'billing_address.email'):
+                try:
+                    validate_email(billing_address['email'])
+                except ValidationError:
+                    errors['billing_address.email'] = "Invalid email address"
+            
+            if not any(k.startswith('billing_address') for k in errors.keys()):
+                cleaned['billing_address'] = billing_address
     
     # ==================== VALIDATE PAYMENT METHOD ====================
     payment_method = data.get('payment_method')
-    valid_payment_methods = ['paystack', 'pod']
+    valid_payment_methods = ['paystack', 'pod', 'cash_on_delivery']
     
     if not payment_method:
         errors['payment_method'] = "Payment method is required"
@@ -202,52 +221,30 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     else:
         cleaned['payment_method'] = payment_method
     
-    # ==================== VALIDATE GUEST CHECKOUT FIELDS ====================
-    if not is_authenticated:
-        guest_email = data.get('guest_email')
-        if not guest_email:
-            errors['guest_email'] = "Email is required for guest checkout"
-        else:
-            try:
-                validate_email(guest_email)
-                cleaned['guest_email'] = guest_email
-            except:
-                errors['guest_email'] = "Invalid email address"
-        
-        if not data.get('guest_first_name'):
-            errors['guest_first_name'] = "First name is required for guest checkout"
-        else:
-            cleaned['guest_first_name'] = data['guest_first_name']
-        
-        if not data.get('guest_last_name'):
-            errors['guest_last_name'] = "Last name is required for guest checkout"
-        else:
-            cleaned['guest_last_name'] = data['guest_last_name']
-        
-        if not data.get('guest_phone'):
-            errors['guest_phone'] = "Phone number is required for guest checkout"
-        else:
-            cleaned['guest_phone'] = data['guest_phone']
-    
     # ==================== VALIDATE OPTIONAL FIELDS ====================
-    optional_fields = ['shipping_cost', 'tax_rate', 'discount_amount', 'customer_note', 'shipping_method', 'currency']
+    optional_fields = ['customer_note', 'currency']
     for field in optional_fields:
         if field in data:
-            try:
-                if field in ['shipping_cost', 'tax_rate', 'discount_amount']:
-                    value = Decimal(str(data[field]))
-                    if value < 0:
-                        errors[field] = f"{field} cannot be negative"
-                    else:
-                        cleaned[field] = value
-                else:
-                    cleaned[field] = data[field]
-            except (ValueError, TypeError, DecimalException):
-                errors[field] = f"Invalid value for {field}"
+            cleaned[field] = data[field]
     
     # Set default currency if not provided
     if 'currency' not in cleaned and 'currency' not in errors:
-        cleaned['currency'] = 'USD'
+        cleaned['currency'] = 'GHS'
+    
+    # ==================== VALIDATE FOR NON-AUTHENTICATED USERS ====================
+    # Note: Guest user info is now taken from shipping address, not separate guest fields
+    if not is_authenticated:
+        # Ensure shipping address has all required guest info
+        if 'shipping_address' in cleaned:
+            shipping = cleaned['shipping_address']
+            if not shipping.get('first_name'):
+                errors['shipping_address.first_name'] = "First name is required for guest checkout"
+            if not shipping.get('last_name'):
+                errors['shipping_address.last_name'] = "Last name is required for guest checkout"
+            if not shipping.get('email'):
+                errors['shipping_address.email'] = "Email is required for guest checkout"
+            if not shipping.get('phone'):
+                errors['shipping_address.phone'] = "Phone number is required for guest checkout"
     
     # ==================== RETURN RESULT ====================
     if errors:
@@ -255,6 +252,8 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     
     return cleaned, None
 
+
+# apps/orders/schemas.py - Update validate_order_status_update
 
 def validate_order_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate order status update"""
@@ -274,13 +273,19 @@ def validate_order_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], 
     if 'admin_note' in data:
         cleaned['admin_note'] = data['admin_note']
     
+    # NEW: Allow tracking info when status is shipped
     if 'carrier' in data:
         cleaned['carrier'] = data['carrier']
+    
+    if 'tracking_number' in data:
+        cleaned['tracking_number'] = data['tracking_number']
     
     if errors:
         return None, errors
     
     return cleaned, None
+
+
 
 
 def validate_payment_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
@@ -410,6 +415,140 @@ def validate_payment_initiation(data: Dict[str, Any]) -> Tuple[Optional[Dict], O
     
     # No additional validation needed for now
     # Can add payment method override in the future
+    
+    if errors:
+        return None, errors
+    
+    return cleaned, None
+
+
+# apps/orders/schemas.py - Add these functions
+
+def serialize_transaction(transaction, is_admin: bool = False) -> Dict:
+    """Serialize transaction for API response"""
+    data = {
+        "id": str(transaction.id),
+        "transaction_type": transaction.transaction_type,
+        "transaction_type_display": transaction.get_transaction_type_display(),
+        "transaction_id": transaction.transaction_id,
+        "reference": transaction.reference,
+        "amount": float(transaction.amount),
+        "currency": transaction.currency,
+        "status": transaction.status,
+        "status_display": transaction.get_status_display(),
+        "payment_method": transaction.payment_method,
+        "created_at": transaction.created_at.isoformat(),
+        "completed_at": transaction.completed_at.isoformat() if transaction.completed_at else None,
+    }
+    
+    if is_admin:
+        data.update({
+            "card_last4": transaction.card_last4,
+            "card_brand": transaction.card_brand,
+            "metadata": transaction.metadata,
+            "notes": transaction.notes,
+            "receipt_url": transaction.receipt_url,
+            "refund_reason": transaction.refund_reason,
+            "parent_transaction_id": str(transaction.parent_transaction_id) if transaction.parent_transaction_id else None,
+        })
+    
+    return data
+
+
+def serialize_shipment_info(order, include_tracking: bool = True) -> Dict:
+    """Serialize shipment information for an order"""
+    data = {
+        "has_shipment": hasattr(order, 'shipment'),
+        "shipment_status": None,
+        "shipment_status_display": None,
+        "tracking_number": None,
+        "carrier": None,
+        "estimated_delivery": None,
+        "shipping_method": order.shipping_method,
+        "shipping_cost": float(order.shipping_cost),
+        "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
+        "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+    }
+    
+    if hasattr(order, 'shipment'):
+        shipment = order.shipment
+        data.update({
+            "shipment_status": shipment.status,
+            "shipment_status_display": shipment.get_status_display(),
+            "tracking_number": shipment.tracking_number,
+            "carrier": shipment.carrier,
+            "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
+        })
+        
+        if include_tracking:
+            from apps.orders.selectors import get_shipment_tracking
+            tracking = get_shipment_tracking(str(shipment.id))
+            data["tracking_history"] = [
+                {
+                    "status": t.status,
+                    "status_display": dict(Shipment.STATUS_CHOICES).get(t.status, t.status),
+                    "location": t.location,
+                    "description": t.description,
+                    "created_at": t.created_at.isoformat(),
+                }
+                for t in tracking
+            ]
+    
+    return data
+
+
+def validate_shipment_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """Validate shipment status update"""
+    errors = {}
+    cleaned = {}
+    
+    shipment_status = data.get('shipment_status')
+    if shipment_status:
+        valid_statuses = ['pending', 'processing', 'ready', 'shipped', 'in_transit', 'out_for_delivery', 'delivered', 'failed', 'returned']
+        if shipment_status not in valid_statuses:
+            errors['shipment_status'] = f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+        else:
+            cleaned['shipment_status'] = shipment_status
+    
+    if 'tracking_number' in data:
+        cleaned['tracking_number'] = data['tracking_number']
+    
+    if 'carrier' in data:
+        cleaned['carrier'] = data['carrier']
+    
+    if 'location' in data:
+        cleaned['location'] = data['location']
+    
+    if 'description' in data:
+        cleaned['description'] = data['description']
+    
+    if errors:
+        return None, errors
+    
+    return cleaned, None
+
+
+def validate_refund_request(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """Validate refund request"""
+    errors = {}
+    cleaned = {}
+    
+    amount = data.get('amount')
+    if not amount:
+        errors['amount'] = "Amount is required"
+    else:
+        try:
+            cleaned['amount'] = Decimal(str(amount))
+            if cleaned['amount'] <= 0:
+                errors['amount'] = "Amount must be greater than 0"
+        except:
+            errors['amount'] = "Invalid amount"
+    
+    if 'refund_reason' in data:
+        cleaned['refund_reason'] = data['refund_reason']
+    
+    if 'admin_note' in data:
+        cleaned['admin_note'] = data['admin_note']
     
     if errors:
         return None, errors

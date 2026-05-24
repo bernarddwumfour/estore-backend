@@ -6,28 +6,33 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django.utils import timezone
 from django.http import JsonResponse
-from users.decorators.auth import jwt_required, role_required, json_request_required
+from apps.users.decorators.auth import jwt_required, role_required, json_request_required,jwt_optional
+from apps.users.services.guest_service import GuestCheckoutService
 from estore.utils.responses import APIResponse
+from decimal import Decimal
+
+from django.conf import settings
+from django.db.models import Q, Sum
 
 from apps.orders.selectors import (
-    get_user_orders,
-    get_admin_orders,
-    get_order_statistics,
-    get_order_by_id,
+    get_user_orders, get_admin_orders, get_order_statistics,
+    get_order_by_id, get_order_transactions, get_refundable_amount,
+    get_orders_by_shipment_status
 )
 from apps.orders.schemas import (
-    serialize_order,
-    serialize_order_list,
-    serialize_order_item,
-    serialize_address,
-    validate_order_create,
-    validate_order_status_update,
-    validate_payment_status_update,
-    validate_address_create,
-    validate_address_update,
+    serialize_order, serialize_order_list, serialize_order_item, serialize_address,
+    validate_order_create, validate_order_status_update,
+    validate_payment_status_update, validate_address_create,
+    validate_address_update,  validate_shipment_update,
+    validate_refund_request
 )
+
 from apps.orders.order_service import OrderService, AddressService
-from apps.orders.models import Order, OrderItem
+from apps.orders.models import Order, OrderItem, Transaction, Shipment
+from apps.orders.shipment_service import ShipmentService
+from apps.orders.transaction_service import TransactionService
+from django.db import transaction
+from apps.users.utils.auth_utils import get_user_or_none
 
 # apps/orders/views.py - Add these imports at the top
 
@@ -81,13 +86,14 @@ def user_orders(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
-@jwt_required
+@jwt_optional
 @json_request_required
 def create_order(request):
-    """Create a new order"""
+    """Create a new order - supports both authenticated users and guest checkout"""
     try:
         data = request.json_data
-        is_authenticated = request.user.is_authenticated
+        user = get_user_or_none(request)
+        is_authenticated = user is not None
 
         # Validate input
         cleaned, errors = validate_order_create(data, is_authenticated)
@@ -101,70 +107,95 @@ def create_order(request):
                 {"payment_method": "Payment method is required"}
             )
 
-        # Prepare guest info if not authenticated
-        guest_info = None
-        if not is_authenticated:
-            guest_info = {
-                "email": cleaned.get("guest_email"),
-                "first_name": cleaned.get("guest_first_name"),
-                "last_name": cleaned.get("guest_last_name"),
-                "phone": cleaned.get("guest_phone"),
+        # Start atomic transaction
+        with transaction.atomic():
+            # Handle user creation/retrieval for guests
+            if not is_authenticated:
+                # Guest info comes from shipping address
+                shipping_address = cleaned.get("shipping_address", {})
+                
+                guest_info = {
+                    "email": shipping_address.get("email"),
+                    "first_name": shipping_address.get("first_name"),
+                    "last_name": shipping_address.get("last_name"),
+                    "phone": shipping_address.get("phone"),
+                }
+                
+                # Validate guest has required fields
+                if not guest_info["email"]:
+                    return APIResponse.validation_error(
+                        {"shipping_address.email": "Email is required for guest checkout"}
+                    )
+                if not guest_info["first_name"] or not guest_info["last_name"]:
+                    return APIResponse.validation_error(
+                        {"shipping_address.name": "First name and last name are required for guest checkout"}
+                    )
+                
+                # Create or retrieve guest user
+                guest_user, error = GuestCheckoutService.create_guest_checkout(guest_info)
+                
+                if error:
+                    return APIResponse.validation_error({"guest": error})
+                
+                # Set the user to the guest user for order creation
+                order_user = guest_user
+            else:
+                # Authenticated user
+                order_user = user
+
+            # Create order with the user (authenticated or guest)
+            order, error = OrderService.create_order(
+                user=order_user,
+                items=cleaned["items"],
+                shipping_address_data=cleaned["shipping_address"],
+                payment_method=payment_method,
+                billing_address_data=cleaned.get("billing_address"),
+                customer_note=cleaned.get("customer_note", ""),
+                currency=cleaned.get("currency", "GHS"),
+            )
+
+            if error:
+                return APIResponse.validation_error(error)
+
+            response_data = {
+                "order": serialize_order(order, is_admin=False),
+                "payment_method": payment_method,
+                "shipping_cost": float(order.shipping_cost),
             }
 
-        # Create order
-        order, error = OrderService.create_order(
-            user=request.user if is_authenticated else None,
-            items=cleaned["items"],
-            shipping_address_data=cleaned["shipping_address"],
-            payment_method=payment_method,
-            guest_info=guest_info,
-            billing_address_data=cleaned.get("billing_address"),
-            shipping_cost=cleaned.get("shipping_cost", 0),
-            tax_rate=cleaned.get("tax_rate", 0),
-            discount_amount=cleaned.get("discount_amount", 0),
-            customer_note=cleaned.get("customer_note", ""),
-            shipping_method=cleaned.get("shipping_method", ""),
-            currency=cleaned.get("currency", "USD"),
-        )
+            # If Paystack payment, initialize payment
+            if payment_method == "paystack":
+                from apps.orders.paystack_service import PaystackService
 
-        if error:
-            return APIResponse.validation_error(error)
+                payment_data, pay_error = PaystackService.initialize_transaction(order)
+                if pay_error:
+                    return APIResponse.validation_error({"payment": pay_error})
 
-        response_data = {
-            "order": serialize_order(order, is_admin=False),
-            "payment_method": payment_method,
-        }
+                response_data["payment"] = payment_data
+                response_data["message"] = "Order created. Please complete payment."
 
-        # If Paystack payment, initialize payment
-        if payment_method == "paystack":
-            from apps.orders.paystack_service import PaystackService
+                return APIResponse.created(
+                    data=response_data, message="Order created. Redirect to payment."
+                )
 
-            payment_data, pay_error = PaystackService.initialize_transaction(order)
-            if pay_error:
-                return APIResponse.validation_error({"payment": pay_error})
-
-            response_data["payment"] = payment_data
-            response_data["message"] = "Order created. Please complete payment."
+            # For POD (Pay on Delivery), order is confirmed
+            elif payment_method in ["pod", "cash_on_delivery"]:
+                response_data["message"] = "Order confirmed. You will pay on delivery."
+                return APIResponse.created(
+                    data=response_data, message="Order confirmed successfully"
+                )
 
             return APIResponse.created(
-                data=response_data, message="Order created. Redirect to payment."
+                data=response_data, message="Order created successfully"
             )
-
-        # For POD, order is confirmed
-        elif payment_method == "pod":
-            response_data["message"] = "Order confirmed. You will pay on delivery."
-            return APIResponse.created(
-                data=response_data, message="Order confirmed successfully"
-            )
-
-        return APIResponse.created(
-            data=response_data, message="Order created successfully"
-        )
 
     except Exception as e:
         logger.error(f"Create order error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return APIResponse.server_error()
-
+    
+      
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -376,6 +407,7 @@ def verify_payment(request):
         logger.error(f"Verify payment error: {str(e)}")
         return APIResponse.server_error()
 
+# apps/orders/views.py - Update webhook to create transaction
 
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -384,53 +416,42 @@ def paystack_webhook(request):
     try:
         from apps.orders.paystack_service import PaystackService
 
-        # Get signature from headers
         signature = request.headers.get("x-paystack-signature", "")
 
         if not signature:
-            return APIResponse.bad_request("No signature provided")
+            return JsonResponse({"status": "error", "message": "No signature"}, status=400)
 
-        # Process webhook
         event_data = PaystackService.handle_webhook(request.body, signature)
 
         if not event_data:
-            return APIResponse.bad_request("Invalid signature")
+            return JsonResponse({"status": "error", "message": "Invalid signature"}, status=400)
 
-        # Handle different event types
         event = event_data.get("event")
 
         if event == "charge.success":
             data = event_data.get("data", {})
             reference = data.get("reference")
 
-            # Process payment
+            # Process payment (this will create transaction)
             success, result = OrderService.verify_payment(reference)
 
             if success:
                 logger.info(f"Webhook: Payment successful for reference {reference}")
             else:
-                logger.error(
-                    f"Webhook: Payment verification failed for {reference}: {result}"
-                )
+                logger.error(f"Webhook: Payment verification failed for {reference}: {result}")
 
         elif event == "charge.dispute.create":
-            logger.warning(
-                f"Dispute created for transaction: {event_data.get('data', {}).get('reference')}"
-            )
+            logger.warning(f"Dispute created: {event_data.get('data', {}).get('reference')}")
 
         elif event == "refund.processed":
-            logger.info(
-                f"Refund processed: {event_data.get('data', {}).get('reference')}"
-            )
+            logger.info(f"Refund processed: {event_data.get('data', {}).get('reference')}")
 
-        # Paystack expects a simple 200 OK response
-        # Using JsonResponse is fine here, but we can also use APIResponse
         return JsonResponse({"status": "success"})
 
     except Exception as e:
         logger.error(f"Webhook error: {str(e)}")
         return JsonResponse({"status": "error", "message": str(e)}, status=500)
-
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -581,13 +602,15 @@ def admin_order_by_number(request, order_number):
         return APIResponse.server_error()
 
 
+# apps/orders/views.py - Update admin_update_order_status
+
 @csrf_exempt
 @require_http_methods(["PUT", "PATCH"])
 @jwt_required
 @role_required("admin", "staff")
 @json_request_required
 def admin_update_order_status(request, order_id):
-    """Admin: Update order status"""
+    """Admin: Update order status (auto-creates shipment when status='shipped')"""
     try:
         data = request.json_data
 
@@ -596,11 +619,16 @@ def admin_update_order_status(request, order_id):
         if errors:
             return APIResponse.validation_error(errors)
 
+        # Pass tracking info if provided (for when status changes to shipped)
+        tracking_number = cleaned.get('tracking_number')
+        carrier = cleaned.get('carrier')
+        
         order, error = OrderService.update_order_status(
             order_id=order_id,
             status=cleaned["status"],
             admin_note=cleaned.get("admin_note"),
-            carrier=cleaned.get("carrier"),
+            carrier=carrier,
+            tracking_number=tracking_number,
             user=request.user,
         )
 
@@ -615,7 +643,8 @@ def admin_update_order_status(request, order_id):
     except Exception as e:
         logger.error(f"Update order status error: {str(e)}")
         return APIResponse.server_error()
-
+    
+    
 
 @csrf_exempt
 @require_http_methods(["PUT", "PATCH"])
@@ -1031,4 +1060,873 @@ def delete_address(request, address_id):
 
     except Exception as e:
         logger.error(f"Delete address error: {str(e)}")
+        return APIResponse.server_error()
+
+
+
+# ==================== SHIPMENT VIEWS ====================
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+def admin_create_shipment(request, order_id):
+    """Admin: Create a new shipment for an order (after payment)"""
+    try:
+        data = request.json_data
+        
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if not order:
+            return APIResponse.not_found("Order not found")
+        
+        # Check if order is paid or is POD
+        if order.payment_method == Order.PAYMENT_CASH_ON_DELIVERY:
+            # POD orders can be shipped without payment
+            pass
+        elif order.payment_status != Order.PAYMENT_PAID:
+            return APIResponse.bad_request("Order must be paid before creating shipment")
+        
+        # Parse shipping cost if provided
+        shipping_cost = None
+        if data.get('shipping_cost'):
+            shipping_cost = Decimal(str(data['shipping_cost']))
+        
+        # Create shipment
+        shipment, error = ShipmentService.create_shipment(
+            order_id=str(order.id),
+            carrier=data.get('carrier', ''),
+            tracking_number=data.get('tracking_number', ''),
+            tracking_url=data.get('tracking_url', ''),
+            weight=Decimal(str(data['weight'])) if data.get('weight') else None,
+            dimensions=data.get('dimensions', ''),
+            estimated_delivery=data.get('estimated_delivery'),
+            notes=data.get('notes', ''),
+            shipping_cost=shipping_cost,
+            created_by=request.user,
+        )
+        
+        if error:
+            return APIResponse.validation_error(error)
+        
+        # Update order shipping method
+        if data.get('shipping_method'):
+            order.shipping_method = data['shipping_method']
+            order.save()
+        
+        from apps.orders.schemas import serialize_shipment_info
+        shipment_info = serialize_shipment_info(order)
+        
+        return APIResponse.created(
+            data={
+                "shipment": {
+                    "id": str(shipment.id),
+                    "status": shipment.status,
+                    "tracking_number": shipment.tracking_number,
+                    "carrier": shipment.carrier,
+                },
+                "order": shipment_info,
+            },
+            message="Shipment created successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Create shipment error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["PUT", "PATCH"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+def admin_update_shipment_status(request, shipment_id):
+    """Admin: Update shipment status and tracking"""
+    try:
+        data = request.json_data
+        
+        # Validate input
+        cleaned, errors = validate_shipment_update(data)
+        if errors:
+            return APIResponse.validation_error(errors)
+        
+        shipment, error = ShipmentService.update_shipment_status(
+            shipment_id=shipment_id,
+            status=cleaned.get('shipment_status'),
+            location=cleaned.get('location', ''),
+            description=cleaned.get('description', ''),
+            tracking_number=cleaned.get('tracking_number'),
+            carrier=cleaned.get('carrier'),
+            created_by=request.user,
+        )
+        
+        if error:
+            return APIResponse.validation_error(error)
+        
+        from apps.orders.schemas import serialize_shipment_info
+        shipment_info = serialize_shipment_info(shipment.order)
+        
+        return APIResponse.success(
+            data={
+                "shipment": {
+                    "id": str(shipment.id),
+                    "status": shipment.status,
+                    "tracking_number": shipment.tracking_number,
+                    "carrier": shipment.carrier,
+                },
+                "order": shipment_info,
+                "tracking_history": ShipmentService.get_shipment_tracking(shipment_id),
+            },
+            message=f"Shipment status updated to {shipment.status}"
+        )
+        
+    except Exception as e:
+        logger.error(f"Update shipment status error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_shipments_list(request):
+    """Admin: List all shipments with filtering"""
+    
+    try:
+        page = int(request.GET.get("page", 1))
+        limit = min(int(request.GET.get("limit", 20)), 100)
+        status = request.GET.get("status")
+        search = request.GET.get("search", "").strip()
+        # date_from = request.GET.get("date_from")
+        # date_to = request.GET.get("date_to")
+        
+        orders, total = get_orders_by_shipment_status(
+            status=status,
+            page=page,
+            limit=limit,
+            search=search,
+        )
+        
+        shipments_data = []
+        for order in orders:
+            if hasattr(order, 'shipment'):
+                shipment = order.shipment
+                shipments_data.append({
+                    "id": str(shipment.id),
+                    "order_number": order.order_number,
+                    "order_id": order.id,
+                    "customer_name": order.customer_name,
+                    "status": shipment.status,
+                    "status_display": shipment.get_status_display(),
+                    "tracking_number": shipment.tracking_number,
+                    "carrier": shipment.carrier,
+                    "created_at": shipment.created_at.isoformat(),
+                    "shipped_at": shipment.shipped_at.isoformat() if shipment.shipped_at else None,
+                    "delivered_at": shipment.delivered_at.isoformat() if shipment.delivered_at else None,
+                    "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
+                })
+        
+        return APIResponse.success(
+            data={
+                "shipments": shipments_data,
+                "total": total,
+                "page": page,
+                "limit": limit,
+            },
+            message="Shipments retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Admin shipments list error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+def order_shipment_info(request, order_id):
+    """Get shipment information for an order (customer view)"""
+    try:
+        order = get_order_by_id(order_id)
+        if not order:
+            return APIResponse.not_found("Order not found")
+        
+        # Check permission
+        if order.user != request.user and not _is_admin(request):
+            return APIResponse.forbidden("You don't have permission to view this order")
+        
+        from apps.orders.schemas import serialize_shipment_info
+        shipment_info = serialize_shipment_info(order)
+        
+        return APIResponse.success(
+            data=shipment_info,
+            message="Shipment info retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Order shipment info error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+def track_shipment(request, tracking_number):
+    """Track a shipment by tracking number"""
+    try:
+        # Find shipment by tracking number
+        try:
+            shipment = Shipment.objects.get(tracking_number=tracking_number)
+        except Shipment.DoesNotExist:
+            return APIResponse.not_found("Shipment not found")
+        
+        # Check permission
+        if shipment.order.user != request.user and not _is_admin(request):
+            return APIResponse.forbidden("You don't have permission to track this shipment")
+        
+        tracking_history = ShipmentService.get_shipment_tracking(str(shipment.id))
+        
+        return APIResponse.success(
+            data={
+                "tracking_number": shipment.tracking_number,
+                "carrier": shipment.carrier,
+                "status": shipment.status,
+                "status_display": shipment.get_status_display(),
+                "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
+                "tracking_history": tracking_history,
+            },
+            message="Tracking information retrieved"
+        )
+        
+    except Exception as e:
+        logger.error(f"Track shipment error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+def admin_bulk_update_shipments(request):
+    """Admin: Bulk update shipment status for multiple orders"""
+    try:
+        data = request.json_data
+        order_ids = data.get('order_ids', [])
+        shipment_status = data.get('shipment_status')
+        tracking_number = data.get('tracking_number', '')
+        carrier = data.get('carrier', '')
+        admin_note = data.get('admin_note', '')
+        
+        if not order_ids:
+            return APIResponse.bad_request("No order IDs provided")
+        
+        if not shipment_status:
+            return APIResponse.bad_request("Shipment status is required")
+        
+        results = {
+            'success': [],
+            'failed': [],
+            'total': len(order_ids)
+        }
+        
+        for order_id in order_ids:
+            try:
+                order = get_order_by_id(order_id, include_cancelled=True)
+                if not order:
+                    results['failed'].append({'id': order_id, 'reason': 'Order not found'})
+                    continue
+                
+                # Check if shipment exists
+                if not hasattr(order, 'shipment'):
+                    results['failed'].append({'id': order_id, 'reason': 'No shipment found for order'})
+                    continue
+                
+                shipment, error = ShipmentService.update_shipment_status(
+                    shipment_id=str(order.shipment.id),
+                    status=shipment_status,
+                    tracking_number=tracking_number,
+                    carrier=carrier,
+                    description=admin_note,
+                    created_by=request.user,
+                )
+                
+                if error:
+                    results['failed'].append({'id': order_id, 'reason': str(error)})
+                else:
+                    results['success'].append({'id': order_id, 'order_number': order.order_number})
+                    
+            except Exception as e:
+                results['failed'].append({'id': order_id, 'reason': str(e)})
+        
+        return APIResponse.success(
+            data=results,
+            message=f"Processed {len(results['success'])} out of {results['total']} shipments"
+        )
+        
+    except Exception as e:
+        logger.error(f"Bulk shipment update error: {str(e)}")
+        return APIResponse.server_error()
+
+
+# ==================== TRANSACTION VIEWS ====================
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+def order_transactions(request, order_id):
+    """Get all transactions for an order"""
+    try:
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if not order:
+            return APIResponse.not_found("Order not found")
+        
+        # Check permission
+        if order.user != request.user and not _is_admin(request):
+            return APIResponse.forbidden("You don't have permission to view this order")
+        
+        transactions = get_order_transactions(order_id)
+        is_admin = _is_admin(request)
+        
+        from apps.orders.schemas import serialize_transaction
+        transactions_data = [serialize_transaction(t, is_admin=is_admin) for t in transactions]
+        
+        # Get refundable amount (admin only)
+        refundable_amount = None
+        if is_admin:
+            refundable_amount = float(get_refundable_amount(order_id))
+        
+        return APIResponse.success(
+            data={
+                "transactions": transactions_data,
+                "refundable_amount": refundable_amount,
+                "order_total": float(order.total),
+                "order_paid": float(order.subtotal + order.shipping_cost + order.tax_amount - order.discount_amount),
+            },
+            message="Transactions retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Order transactions error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+def admin_process_refund(request, order_id):
+    """Admin: Process a refund for an order"""
+    try:
+        data = request.json_data
+        
+        # Validate input
+        cleaned, errors = validate_refund_request(data)
+        if errors:
+            return APIResponse.validation_error(errors)
+        
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if not order:
+            return APIResponse.not_found("Order not found")
+        
+        # Check if order can be refunded
+        if order.payment_status not in [Order.PAYMENT_PAID, Order.PAYMENT_PARTIALLY_REFUNDED]:
+            return APIResponse.bad_request("Order cannot be refunded in its current payment status")
+        
+        # Process refund
+        transaction_obj, error = TransactionService.record_refund(
+            order_id=order_id,
+            amount=Decimal(str(cleaned['amount'])),
+            refund_reason=cleaned.get('refund_reason', ''),
+            notes=cleaned.get('admin_note', ''),
+        )
+        
+        if error:
+            return APIResponse.validation_error(error)
+        
+        from apps.orders.schemas import serialize_transaction
+        transaction_data = serialize_transaction(transaction_obj, is_admin=True)
+        
+        # Get updated refundable amount
+        refundable_amount = float(get_refundable_amount(order_id))
+        
+        return APIResponse.success(
+            data={
+                "transaction": transaction_data,
+                "refundable_amount": refundable_amount,
+                "order_payment_status": order.payment_status,
+            },
+            message=f"Refund of ${cleaned['amount']} processed successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Process refund error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_transactions_list(request):
+    """Admin: List all transactions with filtering"""
+    try:
+        page = int(request.GET.get("page", 1))
+        limit = min(int(request.GET.get("limit", 20)), 100)
+        transaction_type = request.GET.get("type")
+        status = request.GET.get("status")
+        search = request.GET.get("search", "").strip()
+        date_from = request.GET.get("date_from")
+        date_to = request.GET.get("date_to")
+        
+        queryset = Transaction.objects.all().select_related('order')
+        
+        if transaction_type:
+            queryset = queryset.filter(transaction_type=transaction_type)
+        if status:
+            queryset = queryset.filter(status=status)
+        if search:
+            queryset = queryset.filter(
+                Q(transaction_id__icontains=search) |
+                Q(reference__icontains=search) |
+                Q(order__order_number__icontains=search) |
+                Q(order__customer_email__icontains=search)
+            )
+        if date_from:
+            queryset = queryset.filter(created_at__date__gte=date_from)
+        if date_to:
+            queryset = queryset.filter(created_at__date__lte=date_to)
+        
+        total = queryset.count()
+        offset = (page - 1) * limit
+        transactions = list(queryset.order_by('-created_at')[offset:offset + limit])
+        
+        from apps.orders.schemas import serialize_transaction
+        transactions_data = [serialize_transaction(t, is_admin=True) for t in transactions]
+        
+        # Summary stats
+        stats = {
+            "total_charges": float(Transaction.objects.filter(transaction_type='charge', status='success').aggregate(total=Sum('amount'))['total'] or 0),
+            "total_refunds": float(Transaction.objects.filter(transaction_type='refund', status='success').aggregate(total=Sum('amount'))['total'] or 0),
+            "net_revenue": float(Transaction.objects.filter(transaction_type='charge', status='success').aggregate(total=Sum('amount'))['total'] or 0) - 
+                          float(Transaction.objects.filter(transaction_type='refund', status='success').aggregate(total=Sum('amount'))['total'] or 0),
+        }
+        
+        return APIResponse.success(
+            data={
+                "transactions": transactions_data,
+                "total": total,
+                "page": page,
+                "limit": limit,
+                "stats": stats,
+            },
+            message="Transactions retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Admin transactions list error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_transaction_detail(request, transaction_id):
+    """Admin: Get detailed transaction information"""
+    try:
+        transaction = Transaction.objects.select_related('order').get(transaction_id=transaction_id)
+        
+        from apps.orders.schemas import serialize_transaction
+        transaction_data = serialize_transaction(transaction, is_admin=True)
+        
+        # Add related refunds if any
+        refunds = transaction.refunds.all()
+        if refunds:
+            transaction_data['refunds'] = [serialize_transaction(r, is_admin=True) for r in refunds]
+        
+        # Add parent transaction if this is a refund
+        if transaction.parent_transaction:
+            transaction_data['parent_transaction'] = serialize_transaction(transaction.parent_transaction, is_admin=True)
+        
+        return APIResponse.success(
+            data=transaction_data,
+            message="Transaction details retrieved"
+        )
+        
+    except Transaction.DoesNotExist:
+        return APIResponse.not_found("Transaction not found")
+    except Exception as e:
+        logger.error(f"Transaction detail error: {str(e)}")
+        return APIResponse.server_error()
+    
+    
+# apps/orders/views.py - Add these views
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@json_request_required
+def get_shipping_rates(request):
+    """
+    Get real-time shipping rates from Terminal Africa
+    This is typically called during checkout before order creation
+    """
+    try:
+        data = request.json_data
+        
+        # Get shipping address details
+        shipping_address = data.get('shipping_address', {})
+        items = data.get('items', [])
+        currency = data.get('currency', 'GHS')
+        
+        if not shipping_address:
+            return APIResponse.bad_request("Shipping address is required")
+        
+        if not items:
+            return APIResponse.bad_request("Items are required")
+        
+        # Prepare origin address (warehouse/sender)
+        origin = {
+            "country": getattr(settings, 'DEFAULT_SHIPPING_ORIGIN', {}).get('country', 'GH'),
+            "state": getattr(settings, 'DEFAULT_SHIPPING_ORIGIN', {}).get('state', 'Greater Accra'),
+            "city": getattr(settings, 'DEFAULT_SHIPPING_ORIGIN', {}).get('city', 'Accra'),
+            "postal_code": getattr(settings, 'DEFAULT_SHIPPING_ORIGIN', {}).get('postal_code', '00233'),
+            "address": getattr(settings, 'DEFAULT_SHIPPING_ORIGIN', {}).get('address', ''),
+        }
+        
+        # Prepare destination address
+        destination = {
+            "country": shipping_address.get('country', 'GH'),
+            "state": shipping_address.get('state', ''),
+            "city": shipping_address.get('city', ''),
+            "postal_code": shipping_address.get('postal_code', ''),
+            "address": shipping_address.get('address_line1', ''),
+        }
+        
+        # Calculate total weight from items
+        from apps.orders.shipment_service import ShippingCalculator
+        total_weight = Decimal('0.00')
+        
+        # Fetch variant details to get weights
+        for item in items:
+            variant_id = item.get('variant_id')
+            quantity = item.get('quantity', 1)
+            
+            try:
+                from apps.products.models import ProductVariant
+                variant = ProductVariant.objects.get(id=variant_id)
+                if variant.weight:
+                    total_weight += Decimal(str(variant.weight)) * Decimal(str(quantity))
+                else:
+                    # Default weight 0.5kg per item
+                    total_weight += Decimal('0.5') * Decimal(str(quantity))
+            except ProductVariant.DoesNotExist:
+                # Default weight 0.5kg per item
+                total_weight += Decimal('0.5') * Decimal(str(quantity))
+        
+        # Prepare parcels
+        parcels = [{
+            "weight": float(total_weight),
+            "quantity": 1,
+            "description": "Package",
+        }]
+        
+        # Try Terminal Africa first, fallback to calculator
+        from apps.orders.terminal_africa_service import TerminalAfricaService
+        
+        rates, error = TerminalAfricaService.get_shipping_rates(
+            origin=origin,
+            destination=destination,
+            parcels=parcels,
+            currency=currency,
+        )
+        
+        # If Terminal Africa fails or not configured, use internal calculator
+        if error or not rates:
+            # Use internal shipping calculator
+            subtotal = Decimal('0.00')
+            
+            # Calculate subtotal from items
+            for item in items:
+                variant_id = item.get('variant_id')
+                quantity = item.get('quantity', 1)
+                try:
+                    from apps.products.models import ProductVariant
+                    variant = ProductVariant.objects.get(id=variant_id)
+                    subtotal += variant.price * Decimal(str(quantity))
+                except ProductVariant.DoesNotExist:
+                    pass
+            
+            rates = ShippingCalculator.get_shipping_options(
+                country_code=destination['country'],
+                total_weight_kg=total_weight,
+                subtotal=subtotal,
+            )
+            
+            # Format rates to match Terminal Africa format
+            formatted_rates = []
+            for rate in rates:
+                formatted_rates.append({
+                    'id': rate['id'],
+                    'carrier': 'Internal',
+                    'carrier_code': 'internal',
+                    'service_level': rate['name'],
+                    'service_level_code': rate['id'],
+                    'amount': rate['cost'],
+                    'currency': currency,
+                    'estimated_days': rate.get('estimated_days', '3-7 business days'),
+                    'guaranteed_delivery': False,
+                    'description': rate.get('estimated_days', ''),
+                })
+            rates = formatted_rates
+        
+        return APIResponse.success(
+            data={
+                "rates": rates,
+                "origin": origin,
+                "destination": destination,
+                "weight_kg": float(total_weight),
+            },
+            message="Shipping rates retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Get shipping rates error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+# @jwt_required
+@json_request_required
+def get_shipping_options(request):
+    """
+    Get shipping options based on internal calculation
+    This is used when Terminal Africa is not configured or as fallback
+    """
+    try:
+        data = request.json_data
+        
+        country_code = data.get('country_code', 'GH')
+        subtotal = data.get('subtotal', 0)
+        items = data.get('items', [])
+        
+        if not items:
+            return APIResponse.bad_request("Items are required")
+        
+        from apps.orders.shipping_calculator import ShippingCalculator
+        
+        # Calculate total weight
+        total_weight = Decimal('0.00')
+        
+        for item in items:
+            variant_id = item.get('variant_id')
+            quantity = item.get('quantity', 1)
+            
+            try:
+                from apps.products.models import ProductVariant
+                variant = ProductVariant.objects.get(id=variant_id)
+                if variant.weight:
+                    total_weight += Decimal(str(variant.weight)) * Decimal(str(quantity))
+                else:
+                    total_weight += Decimal('0.5') * Decimal(str(quantity))
+            except ProductVariant.DoesNotExist:
+                total_weight += Decimal('0.5') * Decimal(str(quantity))
+        
+        # Get shipping options
+        options = ShippingCalculator.get_shipping_options(
+            country_code=country_code,
+            total_weight_kg=total_weight,
+            subtotal=Decimal(str(subtotal)),
+        )
+        
+        return APIResponse.success(
+            data={
+                "options": options,
+                "weight_kg": float(total_weight),
+                "subtotal": subtotal,
+                "country": country_code,
+            },
+            message="Shipping options retrieved successfully"
+        )
+        
+    except Exception as e:
+        logger.error(f"Get shipping options error: {str(e)}")
+        return APIResponse.server_error()
+    
+    
+
+# apps/orders/views.py - Add this view
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_shipment_detail(request, shipment_id):
+    """Admin: Get detailed shipment information"""
+    try:
+        from apps.orders.models import Shipment
+        
+        # Get shipment with related data
+        shipment = Shipment.objects.select_related(
+            'order', 
+            'order__user', 
+            'order__shipping_address',
+            'order__billing_address'
+        ).prefetch_related(
+            'tracking_history',
+            'tracking_history__created_by',
+            'order__items',
+            'order__items__variant',
+            'order__items__variant__product'
+        ).get(id=shipment_id)
+        
+        order = shipment.order
+        
+        # Build detailed response
+        shipment_data = {
+            "id": str(shipment.id),
+            "order_number": order.order_number,
+            "customer_name": order.customer_name,
+            "customer_email": order.customer_email,
+            "status": shipment.status,
+            "status_display": shipment.get_status_display(),
+            "tracking_number": shipment.tracking_number,
+            "carrier": shipment.carrier,
+            "tracking_url": shipment.tracking_url,
+            "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
+            "shipping_method": order.shipping_method,
+            "shipping_cost": float(order.shipping_cost),
+            "weight": float(shipment.weight) if shipment.weight else None,
+            # "dimensions": shipment.dimensions,
+            "notes": shipment.notes,
+            # "internal_notes": shipment.internal_notes,
+            "created_at": shipment.created_at.isoformat(),
+            "updated_at": shipment.updated_at.isoformat(),
+            "shipped_at": shipment.shipped_at.isoformat() if shipment.shipped_at else None,
+            "delivered_at": shipment.delivered_at.isoformat() if shipment.delivered_at else None,
+            "created_by": shipment.created_by.email if shipment.created_by else None,
+        }
+        
+        # Add tracking history
+        tracking_history = []
+        for track in shipment.tracking_history.all().order_by('-created_at'):
+            tracking_history.append({
+                "status": track.status,
+                "status_display": dict(Shipment.STATUS_CHOICES).get(track.status, track.status),
+                "location": track.location,
+                "description": track.description,
+                "created_at": track.created_at.isoformat(),
+                "created_by": track.created_by.email if track.created_by else None,
+            })
+        shipment_data["tracking_history"] = tracking_history
+        
+        # Add shipping address
+        if order.shipping_address:
+            shipment_data["shipping_address"] = {
+                "first_name": order.shipping_address.first_name,
+                "last_name": order.shipping_address.last_name,
+                "company": order.shipping_address.company,
+                "address_line1": order.shipping_address.address_line1,
+                "address_line2": order.shipping_address.address_line2,
+                "city": order.shipping_address.city,
+                "state": order.shipping_address.state,
+                "postal_code": order.shipping_address.postal_code,
+                "country": order.shipping_address.country,
+                "phone": order.shipping_address.phone,
+                "email": order.shipping_address.email,
+                "instructions": order.shipping_address.instructions,
+            }
+        
+        # Add order items summary
+        order_items = []
+        for item in order.items.all():
+            order_items.append({
+                "id": str(item.id),
+                "product_title": item.product_title,
+                "product_slug": item.product_slug,
+                "sku": item.sku,
+                "quantity": item.quantity,
+                "unit_price": float(item.unit_price),
+                "total_price": float(item.total_price),
+                "image": item.variant.images.first().image.url if item.variant and item.variant.images.exists() else None,
+            })
+        shipment_data["order_items"] = order_items
+        
+        # Add order summary
+        shipment_data["order_summary"] = {
+            "subtotal": float(order.subtotal),
+            "shipping_cost": float(order.shipping_cost),
+            "tax_amount": float(order.tax_amount),
+            "discount_amount": float(order.discount_amount),
+            "total": float(order.total),
+            "currency": order.currency,
+            "item_count": order.item_count,
+            "payment_status": order.payment_status,
+            "payment_status_display": order.get_payment_status_display(),
+            "payment_method": order.payment_method,
+            "payment_method_display": order.get_payment_method_display(),
+        }
+        
+        return APIResponse.success(
+            data=shipment_data,
+            message="Shipment details retrieved successfully"
+        )
+        
+    except Shipment.DoesNotExist:
+        return APIResponse.not_found("Shipment not found")
+    except Exception as e:
+        logger.error(f"Admin shipment detail error: {str(e)}")
+        return APIResponse.server_error()
+    
+    
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+def order_debug_info(request, order_id):
+    """Debug view to check order transactions and shipment"""
+    try:
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if not order:
+            return APIResponse.not_found("Order not found")
+        
+        # Check permissions
+        if order.user != request.user and not _is_admin(request):
+            return APIResponse.forbidden("You don't have permission to view this order")
+        
+        from apps.orders.models import Transaction
+        
+        transactions = Transaction.objects.filter(order=order).values(
+            'id', 'transaction_type', 'amount', 'status', 'created_at', 'transaction_id'
+        )
+        
+        shipment = None
+        if hasattr(order, 'shipment'):
+            shipment = {
+                'id': str(order.shipment.id),
+                'status': order.shipment.status,
+                'tracking_number': order.shipment.tracking_number,
+                'carrier': order.shipment.carrier,
+                'created_at': order.shipment.created_at.isoformat(),
+            }
+        
+        return APIResponse.success(
+            data={
+                "order": {
+                    "id": str(order.id),
+                    "order_number": order.order_number,
+                    "status": order.status,
+                    "payment_status": order.payment_status,
+                    "payment_method": order.payment_method,
+                },
+                "transactions": list(transactions),
+                "shipment": shipment,
+                "has_shipment": hasattr(order, 'shipment'),
+            },
+            message="Debug info retrieved"
+        )
+        
+    except Exception as e:
+        logger.error(f"Debug info error: {str(e)}")
         return APIResponse.server_error()

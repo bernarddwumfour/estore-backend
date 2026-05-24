@@ -3,7 +3,9 @@ from typing import Optional, List, Dict, Any, Tuple
 from django.db.models import Q, Sum
 from django.core.paginator import Paginator
 from apps.orders.models import Order, OrderItem
-from users.models import Address
+from apps.users.models import Address
+from decimal import Decimal
+from .models import Transaction
 
 
 # ==================== ORDER SELECTORS ====================
@@ -169,3 +171,66 @@ def get_address_by_id(address_id: str, user=None) -> Optional[Address]:
         return queryset.get(id=address_id)
     except Address.DoesNotExist:
         return None
+    
+
+# apps/orders/selectors.py - Add these functions
+
+
+
+def get_orders_by_shipment_status(
+    status: str = None,
+    page: int = 1,
+    limit: int = 20,
+    search: str = None,
+) -> Tuple[List[Order], int]:
+    """Get orders filtered by shipment status"""
+    queryset = Order.objects.select_related('user', 'shipping_address').prefetch_related('items')
+    
+    if status:
+        queryset = queryset.filter(shipment__status=status)
+    
+    if search:
+        queryset = queryset.filter(
+            Q(order_number__icontains=search) |
+            Q(shipment__tracking_number__icontains=search) |
+            Q(shipment__carrier__icontains=search)
+        )
+    
+    queryset = queryset.filter(shipment__isnull=False).order_by('-created_at')
+    
+    paginator = Paginator(queryset, limit)
+    page_obj = paginator.get_page(page)
+    
+    return list(page_obj), paginator.count
+
+
+def get_order_transactions(order_id: str) -> List[Transaction]:
+    """Get all transactions for an order"""
+    return list(Transaction.objects.filter(order_id=order_id).order_by('-created_at'))
+
+
+def get_refundable_amount(order_id: str) -> Decimal:
+    """Calculate the maximum refundable amount for an order"""
+    # Get total charged amount
+    charged_amount = Transaction.objects.filter(
+        order_id=order_id,
+        transaction_type='charge',
+        status='success'
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    
+    # Get total refunded amount
+    refunded_amount = Transaction.objects.filter(
+        order_id=order_id,
+        transaction_type='refund',
+        status='success'
+    ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+    
+    return charged_amount - refunded_amount
+
+
+def get_shipment_tracking(shipment_id: str) -> List[Dict]:
+    """Get shipment tracking history"""
+    from apps.orders.models import ShipmentTracking
+    
+    tracking = ShipmentTracking.objects.filter(shipment_id=shipment_id).order_by('-created_at')
+    return list(tracking)

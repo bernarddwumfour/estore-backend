@@ -5,14 +5,14 @@ users/services/verification_service.py
 import logging
 import secrets
 import string
-from datetime import datetime, timedelta
+from datetime import timedelta
 from django.utils import timezone
 from django.conf import settings
 
 from ..models.user import User
 from ..models.verification_token import VerificationToken
-from estore.utils.email_util import send_email
 from urllib.parse import urlencode
+from estore.utils.brevo_mailer import BrevoMailer
 
 logger = logging.getLogger(__name__)
 
@@ -63,19 +63,18 @@ class VerificationService:
             )
             return None
 
+    # ADD THIS PUBLIC METHOD - This is what AuthService is calling
     @staticmethod
     def send_verification_email(user, request=None):
         """
-        Send email verification link to user
+        Public method to send verification email to user
         """
         try:
             if user.email_verified:
                 return True, "Email is already verified"
 
             # Create verification token
-            verification_token = VerificationService.create_verification_token(
-                user, request
-            )
+            verification_token = VerificationService.create_verification_token(user, request)
             if not verification_token:
                 return False, "Failed to create verification token"
 
@@ -85,9 +84,7 @@ class VerificationService:
             )
 
             # Send email
-            success = VerificationService._send_verification_email(
-                user, verification_url
-            )
+            success = VerificationService._send_verification_email(user, verification_url)
 
             if success:
                 logger.info(f"Verification email sent to {user.email}")
@@ -100,54 +97,47 @@ class VerificationService:
             return False, "Failed to send verification email"
 
     @staticmethod
-    def _build_verification_url(token, email):
-        """
-        Build frontend email verification URL
-        """
-        base_url = settings.FRONTEND_BASE_URL.rstrip("/")
-
-        query = urlencode({"token": token, "email": email})
-
-        return f"{base_url}/verify-email?{query}"
-
-    @staticmethod
     def _send_verification_email(user, verification_url):
-        """Send the actual verification email"""
+        """Send the actual verification email using Brevo"""
         subject = f"Verify Your Email - {getattr(settings, 'SITE_NAME', 'API')}"
-
-        # Plain text email
-        message_text = f"""Hello {user.username or user.email},
-
-Please verify your email address by clicking this link:
-{verification_url}
-
-This link will expire in {getattr(settings, 'EMAIL_VERIFICATION_EXPIRY_HOURS', 24)} hours.
-
-If you didn't create an account, please ignore this email.
-
-Best regards,
-{getattr(settings, 'SITE_NAME', 'API')} Team"""
-
+        
         # HTML email
         html_message = f"""<!DOCTYPE html>
 <html>
-<body style="font-family: Arial, sans-serif; line-height: 1.6;">
-    <div style="max-width: 600px; margin: 0 auto;">
+<head>
+    <style>
+        body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
+        .container {{ max-width: 600px; margin: 0 auto; }}
+        .button {{
+            background: #4CAF50;
+            color: white;
+            padding: 12px 24px;
+            text-decoration: none;
+            border-radius: 5px;
+            display: inline-block;
+        }}
+        .code {{
+            background: #f5f5f5;
+            padding: 8px;
+            border-radius: 3px;
+            word-break: break-all;
+            display: block;
+            margin: 10px 0;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
         <h2 style="color: #333;">Verify Your Email</h2>
         <p>Hello <strong>{user.username or user.email}</strong>,</p>
         <p>Please verify your email address by clicking the button below:</p>
         <p>
-            <a href="{verification_url}" 
-               style="background: #4CAF50; color: white; padding: 12px 24px; 
-                      text-decoration: none; border-radius: 5px; display: inline-block;">
+            <a href="{verification_url}" class="button">
                 Verify Email Address
             </a>
         </p>
         <p>Or copy this link to your browser:<br>
-        <code style="background: #f5f5f5; padding: 8px; border-radius: 3px; 
-                     word-break: break-all; display: block; margin: 10px 0;">
-            {verification_url}
-        </code></p>
+        <code class="code">{verification_url}</code></p>
         <p><strong>Note:</strong> This link expires in {getattr(settings, 'EMAIL_VERIFICATION_EXPIRY_HOURS', 24)} hours.</p>
         <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
         <p>Best regards,<br>
@@ -155,13 +145,23 @@ Best regards,
     </div>
 </body>
 </html>"""
-
-        return send_email(
+        
+        mailer = BrevoMailer()
+        return mailer.send_email(
             recipient_email=user.email,
             subject=subject,
-            message_text=message_text,
-            html_message=html_message,
+            html_content=html_message,
+            recipient_name=user.full_name,
         )
+
+    @staticmethod
+    def _build_verification_url(token, email):
+        """
+        Build frontend email verification URL
+        """
+        base_url = settings.FRONTEND_BASE_URL.rstrip("/")
+        query = urlencode({"token": token, "email": email})
+        return f"{base_url}/verify-email?{query}"
 
     @staticmethod
     def verify_email_token(token):

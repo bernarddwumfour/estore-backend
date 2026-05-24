@@ -6,10 +6,9 @@ Authentication and authorization decorators for views
 
 import json
 from functools import wraps
-from django.http import JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
-from users.utils.token_utils import validate_jwt_token
+from apps.users.utils.token_utils import validate_jwt_token
 from estore.utils.responses import APIResponse
 from ..models.user import User
 
@@ -31,7 +30,6 @@ def jwt_required(view_func):
         token = auth_header.split(" ")[1]
 
         # Validate token
-
         is_validated, payload = validate_jwt_token(token)
         if not is_validated:
             return APIResponse.unauthorized(payload)
@@ -41,7 +39,6 @@ def jwt_required(view_func):
             return APIResponse.unauthorized("Invalid token type")
 
         # Get user from database
-
         try:
             user = User.objects.get(id=payload["user_id"])
             if not user.is_active:
@@ -59,6 +56,52 @@ def jwt_required(view_func):
             return APIResponse.server_error()
 
     return wrapper
+
+
+def jwt_optional(view_func):
+    """
+    Decorator that attempts to validate JWT token but doesn't require it
+    If token is valid, user is attached to request
+    If token is invalid or missing, request.user remains None
+    Usage: @jwt_optional
+    """
+
+    @wraps(view_func)
+    def wrapper(request, *args, **kwargs):
+        # Initialize user as None
+        request.user = None
+        request.token_payload = None
+
+        # Get token from Authorization header
+        auth_header = request.headers.get("Authorization", "")
+
+        if auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+
+            # Validate token
+            is_validated, payload = validate_jwt_token(token)
+            
+            if is_validated and payload.get("type") == "access":
+                try:
+                    user = User.objects.get(id=payload["user_id"])
+                    if user.is_active:
+                        # Attach User object to request
+                        request.user = user
+                        request.token_payload = payload
+                except User.DoesNotExist:
+                    # User not found, but that's okay - they're just not authenticated
+                    request.user = None
+                except Exception:
+                    # Any other error, just continue as unauthenticated
+                    request.user = None
+        else:
+            # No token provided, user remains None
+            request.user = None
+
+        return view_func(request, *args, **kwargs)
+
+    return wrapper
+
 
 
 def role_required(*allowed_roles):

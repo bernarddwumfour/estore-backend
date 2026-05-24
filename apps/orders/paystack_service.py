@@ -57,7 +57,7 @@ class PaystackService:
             payload = {
                 'amount': amount,
                 'email': email,
-                'currency': order.currency.upper(),
+                'currency': "GHS",
                 'reference': cls.generate_reference(order),
                 'metadata': metadata,
                 'callback_url': settings.PAYMENT_SUCCESS_URL,
@@ -297,3 +297,93 @@ class PaystackService:
         except Exception as e:
             logger.error(f"Paystack refund error: {str(e)}")
             return False, str(e)
+        
+        
+    # apps/orders/services/paystack_service.py - Update process_successful_payment
+
+    @classmethod
+    def process_successful_payment(cls, reference: str, order_id: str = None) -> Tuple[bool, Optional[Dict]]:
+        """
+        Process a successful payment after verification
+        """
+        from apps.orders.models import Order, Transaction
+        from apps.orders.order_service import OrderService
+        from decimal import Decimal
+        
+        # Verify transaction
+        transaction_data, error = cls.verify_transaction(reference)
+        if error or not transaction_data:
+            return False, {'error': error or 'Verification failed'}
+        
+        # Check if transaction was successful
+        if transaction_data.get('status') != 'success':
+            return False, {'error': f'Payment not successful: {transaction_data.get("status")}'}
+        
+        # Find order by reference or order_id
+        actual_order_id = order_id
+        
+        if not actual_order_id:
+            from django.core.cache import cache
+            actual_order_id = cache.get(f'paystack_ref_{reference}')
+        
+        if not actual_order_id:
+            # Try to find from metadata
+            metadata = transaction_data.get('metadata', {})
+            actual_order_id = metadata.get('order_id')
+        
+        if not actual_order_id:
+            return False, {'error': 'Order not found'}
+        
+        try:
+            order = Order.objects.get(id=actual_order_id)
+        except Order.DoesNotExist:
+            return False, {'error': 'Order not found'}
+        
+        # Check if transaction already exists
+        existing_transaction = Transaction.objects.filter(transaction_id=reference).first()
+        if existing_transaction:
+            # Transaction already recorded
+            return True, {'order': order, 'transaction': transaction_data, 'existing': True}
+        
+        # CREATE TRANSACTION RECORD
+        from django.utils import timezone
+        
+        # Get payment method details
+        payment_method = 'paystack'
+        card_last4 = transaction_data.get('authorization', {}).get('last4', '')
+        card_brand = transaction_data.get('authorization', {}).get('card_type', '')
+        
+        transaction_record = Transaction.objects.create(
+            order=order,
+            transaction_type=Transaction.TRANSACTION_TYPE_CHARGE,
+            transaction_id=reference,
+            reference=reference,
+            amount=Decimal(str(transaction_data.get('amount', 0))) / 100,  # Convert from kobo/pesewas
+            currency=transaction_data.get('currency', order.currency),
+            status=Transaction.TRANSACTION_STATUS_SUCCESS,
+            payment_method=payment_method,
+            card_last4=card_last4,
+            card_brand=card_brand,
+            metadata=transaction_data,
+            receipt_url=transaction_data.get('receipt_url', ''),
+            completed_at=timezone.now(),
+            notes=f"Payment via Paystack. Reference: {reference}",
+        )
+        
+        # Update order payment status only if not already paid
+        if order.payment_status != Order.PAYMENT_PAID:
+            order, error = OrderService.update_payment_status(
+                order_id=str(order.id),
+                payment_status='paid',
+                payment_intent_id=reference,
+                payment_receipt_url=transaction_data.get('receipt_url', ''),
+            )
+            
+            if error:
+                return False, error
+        
+        return True, {
+            'order': order,
+            'transaction': transaction_data,
+            'transaction_record': transaction_record
+        }

@@ -1,18 +1,19 @@
-"""
-users/models/address.py
+# apps/users/models/address.py
 
+"""
 Simple, practical address management for e-commerce
 """
 
 import uuid
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from users.models.user import User
+from apps.users.models.user import User
 
 
 class Address(models.Model):
     """
     Reusable address model for both shipping and billing
+    Same for registered users and guests
     """
 
     ADDRESS_TYPE_SHIPPING = "shipping"
@@ -25,12 +26,10 @@ class Address(models.Model):
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
 
-    # User relationship (optional for guest orders)
+    # User relationship (required - guests have User records)
     user = models.ForeignKey(
         User,
         on_delete=models.CASCADE,
-        null=True,
-        blank=True,
         related_name="addresses",
     )
 
@@ -42,7 +41,7 @@ class Address(models.Model):
         default=ADDRESS_TYPE_SHIPPING,
     )
 
-    # Contact information
+    # Contact information (same for all users)
     first_name = models.CharField(_("first name"), max_length=50)
     last_name = models.CharField(_("last name"), max_length=50)
     company = models.CharField(_("company"), max_length=100, blank=True)
@@ -76,6 +75,7 @@ class Address(models.Model):
         indexes = [
             models.Index(fields=["user", "address_type"]),
             models.Index(fields=["user", "is_default"]),
+            models.Index(fields=["email"]),
         ]
 
     def __str__(self):
@@ -84,7 +84,6 @@ class Address(models.Model):
     def save(self, *args, **kwargs):
         """Ensure only one default address per user per type"""
         if self.is_default and self.user:
-            # Clear other defaults of same type for this user
             Address.objects.filter(
                 user=self.user, address_type=self.address_type, is_default=True
             ).exclude(id=self.id).update(is_default=False)

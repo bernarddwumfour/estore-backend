@@ -7,7 +7,7 @@ from django.views.decorators.http import (
 )
 from django.contrib.auth.decorators import login_required
 from apps.orders.order_service import AddressService
-from users.decorators.auth import json_request_required
+from apps.users.decorators.auth import json_request_required
 
 
 @login_required

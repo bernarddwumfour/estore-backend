@@ -7,7 +7,7 @@ from django.utils import timezone
 
 from apps.orders.models import Order, OrderItem
 from apps.products.models import ProductVariant
-from users.models import Address, User
+from apps.users.models import Address, User
 from apps.orders.selectors import get_order_by_id, get_address_by_id
 
 logger = logging.getLogger(__name__)
@@ -15,38 +15,37 @@ logger = logging.getLogger(__name__)
 
 class OrderService:
     """Order business logic"""
-    
-    
+        
     @staticmethod
     @transaction.atomic
     def create_order(
         user: Optional[User],
         items: List[Dict],
         shipping_address_data: Dict,
-        payment_method: str,  # 'paystack' or 'pod'
+        payment_method: str,
         guest_info: Dict = None,
         billing_address_data: Dict = None,
-        shipping_cost: Decimal = Decimal('0.00'),
-        tax_rate: Decimal = Decimal('0.00'),
-        discount_amount: Decimal = Decimal('0.00'),
         customer_note: str = "",
-        shipping_method: str = "",
-        currency: str = "USD",
+        currency: str = "GHS",
     ) -> Tuple[Optional[Order], Optional[Dict]]:
-        """Create a new order with payment method validation"""
+        """Create a new order with automatic shipping calculation"""
         try:
+            from apps.orders.shipping_calculator import ShippingCalculator
             from apps.orders.payment_config import PaymentConfigService
             
-            # Calculate subtotal and validate items
+            # Determine if user is authenticated - FIX THIS LINE
+            is_authenticated = user is not None and hasattr(user, 'is_authenticated') and user.is_authenticated
+            
+            # Calculate subtotal and collect variants
             subtotal = Decimal('0.00')
             order_items_data = []
+            variants_for_weight = []
 
             for item_data in items:
                 try:
                     variant = ProductVariant.objects.select_related('product').get(
                         id=item_data['variant_id'],
                         is_active=True,
-                        product__status='published'
                     )
                 except ProductVariant.DoesNotExist:
                     return None, {"items": f"Product variant not found: {item_data['variant_id']}"}
@@ -57,7 +56,6 @@ class OrderService:
                 if variant.stock < quantity:
                     return None, {"items": f"Insufficient stock for {variant.sku}. Available: {variant.stock}"}
 
-                # Get discounted price
                 unit_price = variant.discounted_price
                 
                 order_items_data.append({
@@ -71,31 +69,45 @@ class OrderService:
                 })
                 
                 subtotal += unit_price * Decimal(str(quantity))
+                variants_for_weight.append({'variant': variant, 'quantity': quantity})
 
-            # Create or get shipping address
+            # Create or get addresses - FIX: Pass is_authenticated flag
             shipping_address = OrderService._create_or_get_address(
-                shipping_address_data, user, 'shipping'
+                shipping_address_data, user if is_authenticated else None, 'shipping'
             )
             
-            # Create or get billing address
             if billing_address_data:
                 billing_address = OrderService._create_or_get_address(
-                    billing_address_data, user, 'billing'
+                    billing_address_data, user if is_authenticated else None, 'billing'
                 )
             else:
                 billing_address = shipping_address
 
-            # Calculate tax and total
-            tax_amount = (subtotal * tax_rate) / Decimal('100.00')
+            # Calculate shipping cost automatically
+            total_weight = ShippingCalculator.calculate_order_weight(variants_for_weight)
+            shipping_calculation = ShippingCalculator.calculate_shipping_cost(
+                country_code=shipping_address.country,
+                total_weight_kg=total_weight,
+                subtotal=subtotal,
+            )
+            
+            shipping_cost = shipping_calculation['cost']
+            shipping_method = shipping_calculation['method_name']
+            
+            # Calculate tax (simple example - customize as needed)
+            tax_rate = Decimal('0.00')
+            tax_amount = Decimal('0.00')
+            discount_amount = Decimal('0.00')
+            
             total = subtotal + shipping_cost + tax_amount - discount_amount
 
-            # Create order (temporarily with pending payment)
+            # Create order - FIX: Check authentication properly
             order = Order.objects.create(
-                user=user if user and user.is_authenticated else None,
-                guest_email=guest_info.get('email', '') if guest_info else '',
-                guest_first_name=guest_info.get('first_name', '') if guest_info else '',
-                guest_last_name=guest_info.get('last_name', '') if guest_info else '',
-                guest_phone=guest_info.get('phone', '') if guest_info else '',
+                user=user if is_authenticated else None,
+                guest_email=guest_info.get('email', '') if guest_info else shipping_address.email,
+                guest_first_name=guest_info.get('first_name', '') if guest_info else shipping_address.first_name,
+                guest_last_name=guest_info.get('last_name', '') if guest_info else shipping_address.last_name,
+                guest_phone=guest_info.get('phone', '') if guest_info else shipping_address.phone,
                 shipping_address=shipping_address,
                 billing_address=billing_address,
                 payment_method=payment_method,
@@ -122,20 +134,15 @@ class OrderService:
                     unit_price=item_data['unit_price'],
                     quantity=item_data['quantity'],
                 )
-                
-                # Reduce stock
                 item_data['variant'].reduce_stock(item_data['quantity'])
 
             # Handle payment method specific logic
-            if payment_method == 'pod':
-                # Check POD eligibility
+            if payment_method == 'cash_on_delivery' or payment_method == 'pod':
                 is_eligible, reason = PaymentConfigService.check_pod_eligibility(order)
                 if not is_eligible:
-                    # Delete order and return error
                     order.delete()
                     return None, {"payment_method": reason}
                 
-                # For POD, order is confirmed immediately
                 order.payment_status = Order.PAYMENT_PENDING
                 order.status = Order.STATUS_CONFIRMED
                 order.confirmed_at = timezone.now()
@@ -143,21 +150,17 @@ class OrderService:
                 order.pod_eligible = True
                 order.save()
                 
-                logger.info(f"POD order created: {order.order_number}")
-                
             elif payment_method == 'paystack':
-                # For Paystack, order stays pending until payment
                 order.payment_status = Order.PAYMENT_PENDING
                 order.status = Order.STATUS_PENDING
                 order.payment_type = Order.PAYMENT_TYPE_ONLINE
                 order.save()
-                
-                logger.info(f"Paystack order created: {order.order_number}")
             
             else:
                 order.delete()
                 return None, {"payment_method": f"Unsupported payment method: {payment_method}"}
 
+            logger.info(f"Order created: {order.order_number} with shipping cost ${shipping_cost}")
             return order, None
 
         except Exception as e:
@@ -183,12 +186,15 @@ class OrderService:
         except Exception as e:
             logger.error(f"Get payment options error: {str(e)}")
             return None, {"general": str(e)}
-        
+            
     @staticmethod
     def _create_or_get_address(address_data: Dict, user: Optional[User], address_type: str) -> Address:
         """Create or get existing address"""
+        # Check if user is authenticated - FIX THIS
+        is_authenticated = user is not None and hasattr(user, 'is_authenticated') and user.is_authenticated
+        
         # For authenticated users, check if similar address exists
-        if user and user.is_authenticated:
+        if is_authenticated:
             existing = Address.objects.filter(
                 user=user,
                 address_type=address_type,
@@ -206,7 +212,7 @@ class OrderService:
 
         # Create new address
         return Address.objects.create(
-            user=user if user and user.is_authenticated else None,
+            user=user if is_authenticated else None,
             address_type=address_type,
             first_name=address_data.get('first_name', ''),
             last_name=address_data.get('last_name', ''),
@@ -222,6 +228,7 @@ class OrderService:
             instructions=address_data.get('instructions', ''),
             is_default=address_data.get('is_default', False),
         )
+    # apps/orders/services/order_service.py - Fix update_order_status
 
     @staticmethod
     @transaction.atomic
@@ -230,10 +237,13 @@ class OrderService:
         status: str,
         admin_note: str = None,
         carrier: str = None,
+        tracking_number: str = None,
         user: User = None
     ) -> Tuple[Optional[Order], Optional[Dict]]:
-        """Update order status"""
+        """Update order status and create/update shipment when marked as shipped"""
         try:
+            from apps.orders.models import Shipment, ShipmentTracking
+            
             order = get_order_by_id(order_id, include_cancelled=True)
             if not order:
                 return None, {"order": "Order not found"}
@@ -243,10 +253,10 @@ class OrderService:
             if status not in valid_statuses:
                 return None, {"status": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"}
 
-            # Update status
+            # Update order status and timestamps
+            old_status = order.status
             order.status = status
             
-            # Set timestamps based on status
             if status == Order.STATUS_CONFIRMED and not order.confirmed_at:
                 order.confirmed_at = timezone.now()
             elif status == Order.STATUS_SHIPPED and not order.shipped_at:
@@ -261,9 +271,6 @@ class OrderService:
                     if item.variant:
                         item.variant.increase_stock(item.quantity)
 
-            if carrier:
-                order.carrier = carrier
-
             if admin_note:
                 timestamp = timezone.now().strftime("%Y-%m-%d %H:%M")
                 if order.admin_note:
@@ -273,7 +280,82 @@ class OrderService:
 
             order.save()
 
-            logger.info(f"Order {order.order_number} status updated to {status} by {user.email if user else 'system'}")
+            # Handle Shipment creation/updates
+            if status == Order.STATUS_SHIPPED:
+                try:
+                    # Try to get existing shipment
+                    shipment = order.shipment
+                    # Update existing shipment
+                    if shipment.status != Shipment.STATUS_SHIPPED:
+                        shipment.status = Shipment.STATUS_SHIPPED
+                        if tracking_number:
+                            shipment.tracking_number = tracking_number
+                        if carrier:
+                            shipment.carrier = carrier
+                        shipment.save()
+                        
+                        ShipmentTracking.objects.create(
+                            shipment=shipment,
+                            status=Shipment.STATUS_SHIPPED,
+                            description=f"Order status changed from {old_status} to {status}",
+                            created_by=user,
+                        )
+                        logger.info(f"Shipment updated for order {order.order_number}")
+                except Exception as e:
+                    # Create new shipment
+                    shipment = Shipment.objects.create(
+                        order=order,
+                        status=Shipment.STATUS_SHIPPED,
+                        carrier=carrier or '',
+                        tracking_number=tracking_number or '',
+                        created_by=user,
+                        notes=f"Shipment created when order status changed to {status}"
+                    )
+                    
+                    ShipmentTracking.objects.create(
+                        shipment=shipment,
+                        status=Shipment.STATUS_SHIPPED,
+                        description="Shipment created",
+                        created_by=user,
+                    )
+                    logger.info(f"Shipment created for order {order.order_number}")
+                    
+            elif status == Order.STATUS_DELIVERED:
+                try:
+                    shipment = order.shipment
+                    if shipment.status != Shipment.STATUS_DELIVERED:
+                        shipment.status = Shipment.STATUS_DELIVERED
+                        shipment.delivered_at = timezone.now()
+                        shipment.save()
+                        
+                        ShipmentTracking.objects.create(
+                            shipment=shipment,
+                            status=Shipment.STATUS_DELIVERED,
+                            description="Order marked as delivered",
+                            created_by=user,
+                        )
+                        logger.info(f"Shipment marked as delivered for order {order.order_number}")
+                except:
+                    logger.warning(f"No shipment found for delivered order {order.order_number}")
+                    
+            elif status == Order.STATUS_CANCELLED:
+                try:
+                    shipment = order.shipment
+                    if shipment.status != Shipment.STATUS_CANCELLED:
+                        shipment.status = Shipment.STATUS_CANCELLED
+                        shipment.save()
+                        
+                        ShipmentTracking.objects.create(
+                            shipment=shipment,
+                            status=Shipment.STATUS_CANCELLED,
+                            description="Order cancelled",
+                            created_by=user,
+                        )
+                        logger.info(f"Shipment cancelled for order {order.order_number}")
+                except:
+                    pass
+
+            logger.info(f"Order {order.order_number} status updated from {old_status} to {status}")
             return order, None
 
         except Exception as e:

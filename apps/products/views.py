@@ -9,10 +9,12 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from .services.product_service import product_analytics_service
 from django.core.cache import cache
+from .models import ProductVariant
+import traceback
 
 
 # Your existing decorators
-from users.decorators.auth import (
+from apps.users.decorators.auth import (
     json_request_required,
     jwt_required,
     multipart_request_allowed,
@@ -41,24 +43,30 @@ def _is_admin(request) -> bool:
 
 # ==================== PUBLIC PRODUCT VIEWS ====================
 
+
 @csrf_exempt
 @require_http_methods(["GET"])
 def product_list(request):
-    """Get paginated product list with filtering"""
+    """Public: Get paginated product list with filtering for customers"""
     try:
+        # Get query parameters
         page = int(request.GET.get("page", 1))
         limit = int(request.GET.get("limit", 20))
         category_slug = request.GET.get("category")
         brand = request.GET.get("brand")
+        search = request.GET.get("search", "").strip()
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
+        
+        # Price range
         min_price = request.GET.get("min_price")
         max_price = request.GET.get("max_price")
+        
+        # Boolean filters
         in_stock = request.GET.get("in_stock")
         featured = request.GET.get("featured")
         bestseller = request.GET.get("bestseller")
         new = request.GET.get("new")
-        search = request.GET.get("search", "").strip()
-        sort_by = request.GET.get("sort_by", "created_at")
-        sort_order = request.GET.get("sort_order", "desc")
         
         # Convert string parameters
         if min_price:
@@ -74,10 +82,16 @@ def product_list(request):
         if new:
             new = new.lower() == "true"
         
+        # Validate limit
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 20
+        
         is_admin = _is_admin(request)
         
-        # Get products from service (now using selectors + schemas)
-        products, total_count, filters = ProductService.get_products(
+        # Get products from service
+        products, total, pagination_meta = ProductService.get_public_products(
             page=page,
             limit=limit,
             category_slug=category_slug,
@@ -93,15 +107,14 @@ def product_list(request):
             sort_order=sort_order,
             is_admin=is_admin,
         )
+        
         return APIResponse.success(
             data={
-                "items": products,
-                "total": total_count,
-                "page": page,
-                "limit": limit,
-                "filters": filters
+                "products": products,
+                "total": total,
+                "pagination": pagination_meta
             },
-            message="Products listed successfully"
+            message="Products retrieved successfully"
         )
         
     except ValueError as e:
@@ -111,6 +124,51 @@ def product_list(request):
         logger.error(f"Product list error: {str(e)}")
         return APIResponse.server_error()
 
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def product_search(request):
+    """Public: Search products"""
+    try:
+        query = request.GET.get("q", "").strip()
+        page = int(request.GET.get("page", 1))
+        limit = int(request.GET.get("limit", 20))
+        
+        if not query or len(query) < 2:
+            return APIResponse.bad_request("Search query must be at least 2 characters")
+        
+        # Validate limit
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 20
+        
+        is_admin = _is_admin(request)
+        
+        products, total, pagination_meta = ProductService.get_public_products(
+            page=page,
+            limit=limit,
+            search=query,
+            is_admin=is_admin,
+        )
+        
+        return APIResponse.success(
+            data={
+                "products": products,
+                "total": total,
+                "pagination": pagination_meta,
+                "query": query
+            },
+            message=f"Search results for '{query}'"
+        )
+        
+    except ValueError as e:
+        logger.error(f"Product search error: {str(e)}")
+        return APIResponse.bad_request("Invalid query parameter")
+    except Exception as e:
+        logger.error(f"Product search error: {str(e)}")
+        return APIResponse.server_error()
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -128,6 +186,85 @@ def product_detail(request, slug):
     except Exception as e:
         logger.error(f"Product detail error: {str(e)}")
         return APIResponse.server_error()
+
+# apps/products/views.py - Add this view
+# apps/products/views.py
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_variant_list(request):
+    """Admin: List all variants with product information, filters, and pagination"""
+    try:
+        # Get query parameters
+        page = int(request.GET.get("page", 1))
+        limit = min(int(request.GET.get("limit", 20)), 100)
+        search = request.GET.get("search", "").strip()
+        product_id = request.GET.get("product_id")
+        is_active = request.GET.get("is_active")
+        is_default = request.GET.get("is_default")
+        min_price = request.GET.get("min_price")
+        max_price = request.GET.get("max_price")
+        in_stock = request.GET.get("in_stock")
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
+        
+        # Convert boolean parameters
+        if is_active and is_active != '':
+            is_active = is_active.lower() == "true"
+        else:
+            is_active = None
+            
+        if is_default and is_default != '':
+            is_default = is_default.lower() == "true"
+        else:
+            is_default = None
+            
+        if in_stock and in_stock != '':
+            in_stock = in_stock.lower() == "true"
+        else:
+            in_stock = None
+            
+        if min_price:
+            min_price = float(min_price)
+        if max_price:
+            max_price = float(max_price)
+        
+        # Get variants with filters and pagination
+        variants, total, pagination_meta = ProductService.get_all_variants(
+            page=page,
+            limit=limit,
+            search=search if search else None,
+            product_id=product_id if product_id else None,
+            is_active=is_active,
+            is_default=is_default,
+            min_price=min_price,
+            max_price=max_price,
+            in_stock=in_stock,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            is_admin=True,
+        )
+        
+        return APIResponse.success(
+            data={
+                "variants": variants,
+                "total": total,
+                "pagination": pagination_meta
+            },
+            message="Variants retrieved successfully"
+        )
+        
+    except ValueError as e:
+        logger.error(f"Invalid query parameter: {str(e)}")
+        return APIResponse.bad_request(f"Invalid parameter: {str(e)}")
+    except Exception as e:
+        logger.error(f"Admin variant list error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return APIResponse.server_error()
+    
 
 
 @csrf_exempt
@@ -149,6 +286,82 @@ def variant_detail(request, variant_id):
 
 
 
+# apps/products/views.py - Add bulk action for variants
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+def admin_variant_bulk_action(request):
+    """Admin: Perform bulk actions on variants"""
+    try:
+        data = request.json_data
+        action = data.get('action')
+        variant_ids = data.get('variant_ids', [])
+        
+        if not variant_ids:
+            return APIResponse.bad_request("No variant IDs provided")
+        
+        if not action:
+            return APIResponse.bad_request("No action specified")
+        
+        results = {
+            'success': [],
+            'failed': [],
+            'total': len(variant_ids)
+        }
+        
+        if action in ['activate', 'deactivate', 'set_default', 'unset_default']:
+            for variant_id in variant_ids:
+                try:
+                    variant = ProductVariant.objects.get(id=variant_id)
+                    
+                    if action == 'activate':
+                        variant.is_active = True
+                    elif action == 'deactivate':
+                        variant.is_active = False
+                    elif action == 'set_default':
+                        # First, unset any existing default variant for this product
+                        ProductVariant.objects.filter(product=variant.product, is_default=True).update(is_default=False)
+                        variant.is_default = True
+                    elif action == 'unset_default':
+                        variant.is_default = False
+                    
+                    variant.save()
+                    results['success'].append({
+                        'id': variant_id,
+                        'sku': variant.sku,
+                    })
+                except ProductVariant.DoesNotExist:
+                    results['failed'].append({'id': variant_id, 'reason': 'Variant not found'})
+                except Exception as e:
+                    results['failed'].append({'id': variant_id, 'reason': str(e)})
+        
+        elif action == 'delete':
+            for variant_id in variant_ids:
+                try:
+                    variant = ProductVariant.objects.get(id=variant_id)
+                    variant.delete()
+                    results['success'].append({'id': variant_id, 'sku': variant.sku})
+                except ProductVariant.DoesNotExist:
+                    results['failed'].append({'id': variant_id, 'reason': 'Variant not found'})
+                except Exception as e:
+                    results['failed'].append({'id': variant_id, 'reason': str(e)})
+        
+        else:
+            return APIResponse.bad_request(f"Unknown action: {action}")
+        
+        return APIResponse.success(
+            data=results,
+            message=f"Processed {len(results['success'])} out of {results['total']} variants"
+        )
+        
+    except Exception as e:
+        logger.error(f"Admin variant bulk action error: {str(e)}")
+        return APIResponse.server_error()
+    
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -204,45 +417,6 @@ def product_reviews(request, slug):
         logger.error(f"Product reviews error: {str(e)}")
         return APIResponse.server_error()
 
-
-@csrf_exempt
-@require_http_methods(["GET"])
-def product_search(request):
-    """Search products"""
-    try:
-        query = request.GET.get("q", "").strip()
-        page = int(request.GET.get("page", 1))
-        limit = int(request.GET.get("limit", 20))
-        
-        if not query or len(query) < 2:
-            return APIResponse.bad_request("Search query must be at least 2 characters")
-        
-        is_admin = _is_admin(request)
-        
-        products, total_count, filters = ProductService.get_products(
-            page=page,
-            limit=limit,
-            search=query,
-            is_admin=is_admin,
-        )
-        
-        return APIResponse.success(
-            data={
-                "items": products,
-                "total": total_count,
-                "page": page,
-                "limit": limit,
-                "query": query
-            },
-            message=f"Results for {query}"
-        )
-        
-    except ValueError as e:
-        logger.error(f"Product search error: {str(e)}")
-        return APIResponse.bad_request("Invalid query parameter")
-    except Exception as e:
-        logger.error(f"Product search error: {str(e)}")
-        return APIResponse.server_error()
 
 
 # ==================== AUTHENTICATED USER VIEWS ====================
@@ -368,37 +542,78 @@ def create_review(request, slug):
 @jwt_required
 @role_required("admin", "staff")
 def admin_product_list(request):
-    """Admin: List all products (including drafts)"""
+    """Admin: List all products with filters, search, sorting, and pagination"""
     try:
+        # Get query parameters
         page = int(request.GET.get("page", 1))
         limit = int(request.GET.get("limit", 20))
-        status = request.GET.get("status")  # Get status filter
+        status = request.GET.get("status")
         search = request.GET.get("search", "").strip()
+        category_id = request.GET.get("category_id")
+        is_featured = request.GET.get("is_featured")
+        is_bestseller = request.GET.get("is_bestseller")
+        is_new = request.GET.get("is_new")
+        has_stock = request.GET.get("has_stock")
+        min_price = request.GET.get("min_price")
+        max_price = request.GET.get("max_price")
+        sort_by = request.GET.get("sort_by", "created_at")
+        sort_order = request.GET.get("sort_order", "desc")
         
-        # Call get_products with status parameter
-        products_data, total, filters_used = ProductService.get_products(
+        # Convert string parameters
+        if min_price:
+            min_price = float(min_price)
+        if max_price:
+            max_price = float(max_price)
+        if is_featured:
+            is_featured = is_featured.lower() == "true"
+        if is_bestseller:
+            is_bestseller = is_bestseller.lower() == "true"
+        if is_new:
+            is_new = is_new.lower() == "true"
+        if has_stock:
+            has_stock = has_stock.lower() == "true"
+        
+        # Validate limit
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 20
+        
+        # Get products with filters
+        products, total, pagination_meta = ProductService.get_admin_products(
             page=page,
             limit=limit,
             search=search,
-            is_admin=True,  # Admin sees all
-            status=status,  # Pass status filter
+            status=status,
+            category_id=category_id,
+            is_featured=is_featured,
+            is_bestseller=is_bestseller,
+            is_new=is_new,
+            has_stock=has_stock,
+            min_price=min_price,
+            max_price=max_price,
+            sort_by=sort_by,
+            sort_order=sort_order,
         )
         
         return APIResponse.success(
             data={
-                "products": products_data,
+                "products": products,
                 "total": total,
-                "page": page,
-                "limit": limit
+                "pagination": pagination_meta
             },
-            message="Products listed successfully"
+            message="Products retrieved successfully"
         )
         
+    except ValueError as e:
+        logger.error(f"Invalid query parameter: {str(e)}")
+        return APIResponse.bad_request("Invalid query parameter")
     except Exception as e:
         logger.error(f"Admin product list error: {str(e)}")
-        import traceback
         traceback.print_exc()
         return APIResponse.server_error()
+
+    
     
 @csrf_exempt
 @require_http_methods(["POST"])
@@ -447,7 +662,7 @@ def admin_product_detail(request, product_id):
                 return APIResponse.not_found("Product not found")
             
             from .schemas import serialize_product
-            product_data = serialize_product(product, is_admin=True, include_variants=True)
+            product_data = serialize_product(product, is_admin=True)
             
             return APIResponse.success(product_data)
         
@@ -494,7 +709,6 @@ def admin_product_bulk_action(request):
     """Admin: Perform bulk actions on products"""
     try:
         from apps.products.schemas import validate_product_bulk_action, serialize_product_bulk_action_result
-        from apps.products.services.product_service import AdminProductService
         
         # Validate request data
         cleaned, errors = validate_product_bulk_action(request.json_data)
@@ -502,11 +716,12 @@ def admin_product_bulk_action(request):
             return APIResponse.validation_error(errors)
         
         # Execute bulk action
-        results, error = AdminProductService.bulk_action_products(
+        results, error = ProductService.bulk_action_products(
             product_ids=cleaned['product_ids'],
             action=cleaned['action'],
             user=request.user
         )
+        
         
         if error:
             return APIResponse.validation_error(error)
@@ -514,10 +729,11 @@ def admin_product_bulk_action(request):
         # Serialize and return response
         serialized_results = serialize_product_bulk_action_result(results)
         
-        if results['failed_count'] == 0:
-            message = f"Successfully {cleaned['action']}ed {results['success_count']} products"
+        if serialized_results['failed_count'] == 0:
+            message = f"Successfully {cleaned['action']}ed {serialized_results['success_count']} products"
         else:
-            message = f"Processed {results['success_count']} successfully, {results['failed_count']} failed"
+            message = f"Processed {serialized_results['success_count']} successfully, {serialized_results['failed_count']} failed"
+        print("hereeee")
         
         return APIResponse.success(
             data=serialized_results,
@@ -737,42 +953,104 @@ def product_analytics(request):
         logger.error(f"Product analytics error: {str(e)}")
         return APIResponse.server_error()
 # apps/products/views.py - Update category views
-
 @csrf_exempt
 @require_http_methods(["GET"])
 def category_list(request):
-    """Get all categories (hide hidden from customers)"""
     try:
-        is_admin = _is_admin(request)
-        
-        # Use the updated selector that respects hidden flag
         from apps.products.selectors import get_all_categories
-        categories = get_all_categories(only_active=True, is_admin=is_admin)
+        from apps.products.schemas import serialize_category_list
         
-        # Also get product counts for visible categories only
-        for category in categories:
-            if is_admin:
-                # Admin sees all products in category
-                category.product_count = Product.objects.filter(category=category).count()
-            else:
-                # Customers only see published products in non-hidden categories
+        search = request.GET.get('search', None)
+        parent_id = request.GET.get('parent_id', None)
+        include_product_counts = request.GET.get('include_counts', 'true').lower() == 'true'
+        as_tree = request.GET.get('as_tree', 'false').lower() == 'true'
+        
+        try:
+            page = int(request.GET.get('page', 1))
+            limit = int(request.GET.get('limit', 20))
+        except ValueError:
+            page = 1
+            limit = 20
+        
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 20
+        
+        categories, total, pagination_meta = get_all_categories(
+            only_active=True,
+            is_admin=False, 
+            search=search,
+            parent_id=parent_id,
+            is_hidden=None, 
+            sort_by="name", 
+            sort_order="asc",
+            page=page,
+            limit=limit
+        )
+        
+        if include_product_counts:
+            from apps.products.models import Product
+            
+            for category in categories:
                 category.product_count = Product.objects.filter(
                     category=category, 
                     status=Product.STATUS_PUBLISHED
                 ).count()
         
-        from apps.products.schemas import serialize_category_list
-        categories_data = serialize_category_list(categories, is_admin=is_admin)
+        categories_data = serialize_category_list(categories, is_admin=False)
+        
+        if include_product_counts:
+            for i, category_data in enumerate(categories_data):
+                category_data['product_count'] = categories[i].product_count if hasattr(categories[i], 'product_count') else 0
+        
+        if as_tree:
+          
+            all_categories, total_all, _ = get_all_categories(
+                only_active=True,
+                is_admin=False,
+                search=search,
+                parent_id=None,  # Get all for tree building
+                is_hidden=None,
+                sort_by="name",
+                sort_order="asc",
+                page=1,
+                limit=1000  # Large limit for tree
+            )
+            
+            all_categories_data = serialize_category_list(all_categories, is_admin=False)
+            
+            category_dict = {cat['id']: cat for cat in all_categories_data}
+            
+            tree = []
+            for cat in all_categories_data:
+                cat['children'] = []
+                if cat['parent_id'] and cat['parent_id'] in category_dict:
+                    category_dict[cat['parent_id']]['children'].append(cat)
+                else:
+                    tree.append(cat)
+            
+            categories_data = tree
+            total = len(tree)
+        
+        response_data = {
+            "categories": categories_data,
+            "total": total,
+            "pagination": pagination_meta if not as_tree else None
+        }
+        
+        if as_tree:
+            response_data.pop('pagination', None)
         
         return APIResponse.success(
-            data={"categories": categories_data},
+            data=response_data,
             message="Categories retrieved successfully"
         )
         
     except Exception as e:
         logger.error(f"Category list error: {str(e)}")
         return APIResponse.server_error()
-
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
@@ -830,27 +1108,75 @@ def category_detail(request, slug):
 # apps/products/views.py - Separate admin category views
 
 # ==================== ADMIN CATEGORY VIEWS ====================
+# apps/products/views.py (update the admin_category_list view)
 
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
 def admin_category_list(request):
-    """Admin: List all categories (including hidden and inactive)"""
+    """Admin: List all categories with filters, search, sorting, and pagination"""
     try:
         from apps.products.selectors import get_all_categories
-        from apps.products.schemas import serialize_category_list
+        from apps.products.schemas import serialize_category_list, serialize_pagination_metadata
         
-        categories = get_all_categories(only_active=False, is_admin=True)
+        # Get query parameters
+        search = request.GET.get('search', None)
+        parent_id = request.GET.get('parent_id', None)
+        is_hidden_param = request.GET.get('is_hidden', None)
+        is_active_param = request.GET.get('is_active', None)
+        sort_by = request.GET.get('sort_by', 'name')
+        sort_order = request.GET.get('sort_order', 'asc')
+        
+        # Pagination parameters
+        try:
+            page = int(request.GET.get('page', 1))
+            limit = int(request.GET.get('limit', 20))
+        except ValueError:
+            page = 1
+            limit = 20
+        
+        # Validate limit (max 100 items per page)
+        if limit > 100:
+            limit = 100
+        if limit < 1:
+            limit = 20
+        
+        # Convert string params to boolean
+        is_hidden = None
+        if is_hidden_param is not None and is_hidden_param != '':
+            is_hidden = is_hidden_param.lower() == 'true'
+        
+        only_active = True
+        if is_active_param is not None and is_active_param != '':
+            only_active = is_active_param.lower() == 'true'
+        
+        # Get categories with filters
+        categories, total, pagination_meta = get_all_categories(
+            only_active=only_active,
+            is_admin=True,
+            search=search,
+            parent_id=parent_id,
+            is_hidden=is_hidden,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            page=page,
+            limit=limit
+        )
         
         return APIResponse.success(
-            {"categories": serialize_category_list(categories, is_admin=True)},
+            {
+                "categories": serialize_category_list(categories, is_admin=True),
+                "total": total,
+                "pagination": serialize_pagination_metadata(pagination_meta)
+            },
             "Categories retrieved successfully"
         )
     except Exception as e:
         logger.error(f"Admin category list error: {str(e)}")
         return APIResponse.server_error()
-
+    
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
