@@ -391,17 +391,17 @@ class ProductService:
     @staticmethod
     def get_product_detail(slug: str, is_admin: bool = False) -> Optional[Dict]:
         """Get detailed product information"""
-        product = get_product_by_slug(slug, include_inactive=is_admin)
+        product = get_product_by_slug(slug, include_inactive=False)
 
         if not product:
             return None
-
+        
         # Check if accessible to non-admin
         if not is_admin and product.status != Product.STATUS_PUBLISHED:
             return None
 
         product_data = serialize_product(
-            product, is_admin=is_admin, include_variants=True
+            product, is_admin=is_admin
         )
 
         # Add related products
