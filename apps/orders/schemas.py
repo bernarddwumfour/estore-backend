@@ -140,7 +140,6 @@ def serialize_order_list(orders, is_admin: bool = False) -> List[Dict]:
     """Serialize list of orders (summary)"""
     return [serialize_order(order, is_admin, detailed=False) for order in orders]
 
-
 def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate order creation data"""
     errors = {}
@@ -197,6 +196,42 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     if not errors.get('shipping_address') and 'shipping_address' not in errors:
         cleaned['shipping_address'] = shipping_address
     
+    # ==================== VALIDATE GUEST INFO (for non-authenticated users) ====================
+    if not is_authenticated:
+        guest_info = data.get('guest_info', {})
+        
+        if not guest_info:
+            errors['guest_info'] = "Guest information is required for checkout"
+        else:
+            # Validate required guest fields
+            if not guest_info.get('email'):
+                errors['guest_info.email'] = "Email is required for guest checkout"
+            elif not errors.get('guest_info.email'):
+                try:
+                    validate_email(guest_info['email'])
+                except ValidationError:
+                    errors['guest_info.email'] = "Invalid email address"
+            
+            if not guest_info.get('first_name'):
+                errors['guest_info.first_name'] = "First name is required for guest checkout"
+            
+            if not guest_info.get('last_name'):
+                errors['guest_info.last_name'] = "Last name is required for guest checkout"
+            
+            # Optional phone field
+            phone = guest_info.get('phone', '')
+            if phone:
+                cleaned['guest_phone'] = phone
+            
+            # If no errors, store guest info
+            if not any(k.startswith('guest_info') for k in errors.keys()):
+                cleaned['guest_info'] = {
+                    'email': guest_info['email'],
+                    'first_name': guest_info['first_name'],
+                    'last_name': guest_info['last_name'],
+                    'phone': guest_info.get('phone', ''),
+                }
+    
     # ==================== VALIDATE BILLING ADDRESS (optional) ====================
     use_separate_billing = data.get('use_separate_billing', False)
     
@@ -240,27 +275,11 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     if 'currency' not in cleaned and 'currency' not in errors:
         cleaned['currency'] = 'GHS'
     
-    # ==================== VALIDATE FOR NON-AUTHENTICATED USERS ====================
-    # Note: Guest user info is now taken from shipping address, not separate guest fields
-    if not is_authenticated:
-        # Ensure shipping address has all required guest info
-        if 'shipping_address' in cleaned:
-            shipping = cleaned['shipping_address']
-            if not shipping.get('first_name'):
-                errors['shipping_address.first_name'] = "First name is required for guest checkout"
-            if not shipping.get('last_name'):
-                errors['shipping_address.last_name'] = "Last name is required for guest checkout"
-            if not shipping.get('email'):
-                errors['shipping_address.email'] = "Email is required for guest checkout"
-            if not shipping.get('phone'):
-                errors['shipping_address.phone'] = "Phone number is required for guest checkout"
-    
     # ==================== RETURN RESULT ====================
     if errors:
         return None, errors
     
     return cleaned, None
-
 
 # apps/orders/schemas.py - Update validate_order_status_update
 

@@ -91,7 +91,7 @@ def create_order(request):
     try:
         data = request.json_data
         user = get_user_or_none(request)
-        is_authenticated = user is not None
+        is_authenticated = user is not None and user.is_authenticated
 
         # Validate input
         cleaned, errors = validate_order_create(data, is_authenticated)
@@ -109,34 +109,50 @@ def create_order(request):
         with transaction.atomic():
             # Handle user creation/retrieval for guests
             if not is_authenticated:
-                # Guest info comes from shipping address
-                shipping_address = cleaned.get("shipping_address", {})
+                # Get dedicated guest info (not from shipping address)
+                guest_info = cleaned.get("guest_info", {})
                 
-                guest_info = {
-                    "email": shipping_address.get("email"),
-                    "first_name": shipping_address.get("first_name"),
-                    "last_name": shipping_address.get("last_name"),
-                    "phone": shipping_address.get("phone"),
-                }
-                
-                # Validate guest has required fields
-                if not guest_info["email"]:
+                # Validate guest info has required fields (should already be validated)
+                if not guest_info.get("email"):
                     return APIResponse.validation_error(
-                        {"shipping_address.email": "Email is required for guest checkout"}
+                        {"guest_info.email": "Email is required for guest checkout"}
                     )
-                if not guest_info["first_name"] or not guest_info["last_name"]:
+                if not guest_info.get("first_name") or not guest_info.get("last_name"):
                     return APIResponse.validation_error(
-                        {"shipping_address.name": "First name and last name are required for guest checkout"}
+                        {"guest_info.name": "First name and last name are required for guest checkout"}
                     )
                 
-                # Create or retrieve guest user
+                # Create or retrieve guest user - THIS RETURNS A USER OBJECT, NOT A DICT
                 guest_user, error = GuestCheckoutService.create_guest_checkout(guest_info)
                 
                 if error:
-                    return APIResponse.validation_error({"guest": error})
+                    return APIResponse.validation_error({"guest_info": error})
+                
+                # guest_user should be a User object, not a dictionary
+                # If it's a dictionary, we need to extract the user
+                if isinstance(guest_user, dict):
+                    # This shouldn't happen if the service is implemented correctly
+                    # But as a fallback, get the user from the dict
+                    from apps.users.models.user import User
+                    guest_user = User.objects.filter(id=guest_user.get('id')).first()
+                    if not guest_user:
+                        return APIResponse.validation_error({"guest_info": "Failed to create guest user"})
                 
                 # Set the user to the guest user for order creation
                 order_user = guest_user
+                
+                # Ensure shipping address has the guest's email and phone if not provided
+                shipping_address = cleaned.get("shipping_address", {})
+                if not shipping_address.get("email") and guest_info.get("email"):
+                    shipping_address["email"] = guest_info["email"]
+                if not shipping_address.get("phone") and guest_info.get("phone"):
+                    shipping_address["phone"] = guest_info["phone"]
+                if not shipping_address.get("first_name") and guest_info.get("first_name"):
+                    shipping_address["first_name"] = guest_info["first_name"]
+                if not shipping_address.get("last_name") and guest_info.get("last_name"):
+                    shipping_address["last_name"] = guest_info["last_name"]
+                
+                cleaned["shipping_address"] = shipping_address
             else:
                 # Authenticated user
                 order_user = user
@@ -147,6 +163,7 @@ def create_order(request):
                 items=cleaned["items"],
                 shipping_address_data=cleaned["shipping_address"],
                 payment_method=payment_method,
+                guest_info=guest_info if not is_authenticated else None,
                 billing_address_data=cleaned.get("billing_address"),
                 customer_note=cleaned.get("customer_note", ""),
                 currency=cleaned.get("currency", "GHS"),

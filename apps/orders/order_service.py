@@ -33,8 +33,8 @@ class OrderService:
             from apps.orders.shipping_calculator import ShippingCalculator
             from apps.orders.payment_config import PaymentConfigService
             
-            # Determine if user is authenticated - FIX THIS LINE
-            is_authenticated = user is not None and hasattr(user, 'is_authenticated') and user.is_authenticated
+            # Determine if user exists (for guest users, user is not None but is a guest user object)
+            has_user = user is not None
             
             # Calculate subtotal and collect variants
             subtotal = Decimal('0.00')
@@ -71,14 +71,15 @@ class OrderService:
                 subtotal += unit_price * Decimal(str(quantity))
                 variants_for_weight.append({'variant': variant, 'quantity': quantity})
 
-            # Create or get addresses - FIX: Pass is_authenticated flag
+            # Create or get addresses - Always pass the user (even for guests)
+            # For guests, the user object exists (created by create_guest_checkout)
             shipping_address = OrderService._create_or_get_address(
-                shipping_address_data, user if is_authenticated else None, 'shipping'
+                shipping_address_data, user, 'shipping'
             )
             
             if billing_address_data:
                 billing_address = OrderService._create_or_get_address(
-                    billing_address_data, user if is_authenticated else None, 'billing'
+                    billing_address_data, user, 'billing'
                 )
             else:
                 billing_address = shipping_address
@@ -101,9 +102,10 @@ class OrderService:
             
             total = subtotal + shipping_cost + tax_amount - discount_amount
 
-            # Create order - FIX: Check authentication properly
+            # Create order - Always associate with the user (even for guests)
+            # For guests, we use the user object that was created
             order = Order.objects.create(
-                user=user if is_authenticated else None,
+                user=user,  # Always pass the user - for guests this is the guest user
                 guest_email=guest_info.get('email', '') if guest_info else shipping_address.email,
                 guest_first_name=guest_info.get('first_name', '') if guest_info else shipping_address.first_name,
                 guest_last_name=guest_info.get('last_name', '') if guest_info else shipping_address.last_name,
@@ -167,7 +169,6 @@ class OrderService:
             logger.error(f"Order creation error: {str(e)}")
             return None, {"general": f"Failed to create order: {str(e)}"}
 
-
     @staticmethod
     def get_order_payment_options(order_id: str) -> Tuple[Optional[Dict], Optional[Dict]]:
         """Get available payment options for an order"""
@@ -186,49 +187,32 @@ class OrderService:
         except Exception as e:
             logger.error(f"Get payment options error: {str(e)}")
             return None, {"general": str(e)}
-            
+  
+  
     @staticmethod
-    def _create_or_get_address(address_data: Dict, user: Optional[User], address_type: str) -> Address:
-        """Create or get existing address"""
-        # Check if user is authenticated - FIX THIS
-        is_authenticated = user is not None and hasattr(user, 'is_authenticated') and user.is_authenticated
+    def _create_or_get_address(address_data: Dict, user: Optional[User], address_type: str = 'shipping') -> Address:
+        """Create an address for a user"""
+        from apps.users.models.address import Address
         
-        # For authenticated users, check if similar address exists
-        if is_authenticated:
-            existing = Address.objects.filter(
-                user=user,
-                address_type=address_type,
-                first_name=address_data.get('first_name'),
-                last_name=address_data.get('last_name'),
-                address_line1=address_data.get('address_line1'),
-                city=address_data.get('city'),
-                country=address_data.get('country'),
-                postal_code=address_data.get('postal_code'),
-                is_active=True
-            ).first()
-            
-            if existing:
-                return existing
-
-        # Create new address
-        return Address.objects.create(
-            user=user if is_authenticated else None,
+        # For both authenticated and guest users, create a new address
+        # Don't try to get existing addresses as shipping addresses can be different per order
+        address = Address.objects.create(
+            user=user,  # user is either authenticated user or guest user (User object)
             address_type=address_type,
             first_name=address_data.get('first_name', ''),
             last_name=address_data.get('last_name', ''),
-            company=address_data.get('company', ''),
-            phone=address_data.get('phone', ''),
             email=address_data.get('email', ''),
+            phone=address_data.get('phone', ''),
             address_line1=address_data.get('address_line1', ''),
             address_line2=address_data.get('address_line2', ''),
             city=address_data.get('city', ''),
             state=address_data.get('state', ''),
             postal_code=address_data.get('postal_code', ''),
-            country=address_data.get('country', ''),
-            instructions=address_data.get('instructions', ''),
-            is_default=address_data.get('is_default', False),
+            country=address_data.get('country', 'Ghana'),
+            is_default=False,  # Don't set as default for guest orders
         )
-    # apps/orders/services/order_service.py - Fix update_order_status
+        
+        return address
 
     @staticmethod
     @transaction.atomic

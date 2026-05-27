@@ -5,6 +5,7 @@ from typing import Dict, Optional, Tuple
 from django.db import transaction
 from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
+from apps.users.models import User
 
 logger = logging.getLogger(__name__)
 
@@ -12,12 +13,13 @@ logger = logging.getLogger(__name__)
 class GuestCheckoutService:
     """Service for guest checkout operations"""
     
+    
     @staticmethod
     @transaction.atomic
     def create_guest_checkout(
         data: Dict[str, any],
         order_data: Dict = None,
-    ) -> Tuple[Optional[Dict], Optional[str]]:
+    ) -> Tuple[Optional[User], Optional[str]]:  # Changed return type to User, not Dict
         """
         Create or retrieve guest user for checkout
         
@@ -26,7 +28,7 @@ class GuestCheckoutService:
             order_data: Optional order data to include in response
         
         Returns:
-            Tuple of (guest_data, error_message)
+            Tuple of (guest_user, error_message) - guest_user is a User object
         """
         from apps.users.models.user import User
         
@@ -80,23 +82,14 @@ class GuestCheckoutService:
                 
                 logger.info(f"New guest user created: {user.email}")
             
-            # Prepare response data
-            guest_data = {
-                "id": str(user.id),
-                "email": user.email,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "is_guest": not user.has_usable_password(),
-            }
-            
-            if order_data:
-                guest_data["order"] = order_data
-            
-            return guest_data, None
+            # Return the User object directly
+            return user, None
             
         except Exception as e:
             logger.error(f"Guest checkout error: {str(e)}")
             return None, "Failed to process guest checkout"
+    
+   
     
     @staticmethod
     def get_guest_user_by_email(email: str) -> Optional[Dict]:
