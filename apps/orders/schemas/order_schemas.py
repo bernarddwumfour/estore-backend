@@ -1,45 +1,13 @@
-# apps/orders/schemas.py
-from decimal import Decimal
-from typing import Dict, Any, Tuple, Optional, List
-from django.core.validators import validate_email
-from .models import Shipment
+"""
+Order Schemas - Serialization and validation for orders
+"""
 
+from typing import Dict, Any, Tuple, Optional, List
+from decimal import Decimal
+from django.core.validators import validate_email
 from django.core.exceptions import ValidationError
 
-
-# ==================== OUTPUT SERIALIZERS ====================
-
-def serialize_address(address, is_admin: bool = False) -> Optional[Dict]:
-    """Serialize address model"""
-    if not address:
-        return None
-    
-    data = {
-        "id": str(address.id),
-        "address_type": address.address_type,
-        "first_name": address.first_name,
-        "last_name": address.last_name,
-        "company": address.company,
-        "phone": address.phone,
-        "email": address.email,
-        "address_line1": address.address_line1,
-        "address_line2": address.address_line2,
-        "city": address.city,
-        "state": address.state,
-        "postal_code": address.postal_code,
-        "country": address.country,
-        "instructions": address.instructions,
-        "is_default": address.is_default,
-    }
-    
-    if is_admin:
-        data.update({
-            "is_active": address.is_active,
-            "created_at": address.created_at.isoformat(),
-            "updated_at": address.updated_at.isoformat(),
-        })
-    
-    return data
+from apps.orders.models import Shipment
 
 
 def serialize_order_item(item, is_admin: bool = False) -> Dict:
@@ -63,9 +31,10 @@ def serialize_order_item(item, is_admin: bool = False) -> Dict:
     }
 
 
-
 def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dict:
     """Serialize order model"""
+    from apps.orders.schemas.address_schemas import serialize_address
+    
     data = {
         "id": str(order.id),
         "order_number": order.order_number,
@@ -134,11 +103,10 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
     return data
 
 
-
-
 def serialize_order_list(orders, is_admin: bool = False) -> List[Dict]:
     """Serialize list of orders (summary)"""
     return [serialize_order(order, is_admin, detailed=False) for order in orders]
+
 
 def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate order creation data"""
@@ -281,7 +249,6 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     
     return cleaned, None
 
-# apps/orders/schemas.py - Update validate_order_status_update
 
 def validate_order_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate order status update"""
@@ -314,8 +281,6 @@ def validate_order_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], 
     return cleaned, None
 
 
-
-
 def validate_payment_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate payment status update"""
     errors = {}
@@ -336,68 +301,6 @@ def validate_payment_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict]
     
     if 'payment_receipt_url' in data:
         cleaned['payment_receipt_url'] = data['payment_receipt_url']
-    
-    if errors:
-        return None, errors
-    
-    return cleaned, None
-
-
-def validate_address_create(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Validate address creation data"""
-    errors = {}
-    cleaned = {}
-    
-    required_fields = [
-        'address_type', 'first_name', 'last_name', 'phone', 'email',
-        'address_line1', 'city', 'state', 'postal_code', 'country'
-    ]
-    
-    for field in required_fields:
-        if not data.get(field):
-            errors[field] = f"{field.replace('_', ' ').title()} is required"
-    
-    if data.get('address_type') not in ['shipping', 'billing']:
-        errors['address_type'] = "Address type must be 'shipping' or 'billing'"
-    
-    if data.get('email'):
-        try:
-            validate_email(data['email'])
-        except:
-            errors['email'] = "Invalid email address"
-    
-    if errors:
-        return None, errors
-    
-    cleaned = {field: data.get(field, '') for field in required_fields}
-    cleaned['company'] = data.get('company', '')
-    cleaned['address_line2'] = data.get('address_line2', '')
-    cleaned['instructions'] = data.get('instructions', '')
-    cleaned['is_default'] = data.get('is_default', False)
-    
-    return cleaned, None
-
-
-def validate_address_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Validate address update data"""
-    errors = {}
-    cleaned = {}
-    
-    updatable_fields = [
-        'first_name', 'last_name', 'company', 'phone', 'email',
-        'address_line1', 'address_line2', 'city', 'state', 
-        'postal_code', 'country', 'instructions', 'is_default'
-    ]
-    
-    for field in updatable_fields:
-        if field in data:
-            cleaned[field] = data[field]
-    
-    if 'email' in cleaned:
-        try:
-            validate_email(cleaned['email'])
-        except:
-            errors['email'] = "Invalid email address"
     
     if errors:
         return None, errors
@@ -434,194 +337,3 @@ def validate_bulk_order_action(data: Dict[str, Any]) -> Tuple[Optional[Dict], Op
         return None, errors
     
     return cleaned, None
-
-
-def validate_payment_initiation(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Validate payment initiation request"""
-    errors = {}
-    cleaned = {}
-    
-    # No additional validation needed for now
-    # Can add payment method override in the future
-    
-    if errors:
-        return None, errors
-    
-    return cleaned, None
-
-
-# apps/orders/schemas.py - Add these functions
-
-def serialize_transaction(transaction, is_admin: bool = False) -> Dict:
-    """Serialize transaction for API response"""
-    data = {
-        "id": str(transaction.id),
-        "transaction_type": transaction.transaction_type,
-        "transaction_type_display": transaction.get_transaction_type_display(),
-        "transaction_id": transaction.transaction_id,
-        "reference": transaction.reference,
-        "amount": float(transaction.amount),
-        "currency": transaction.currency,
-        "status": transaction.status,
-        "status_display": transaction.get_status_display(),
-        "payment_method": transaction.payment_method,
-        "created_at": transaction.created_at.isoformat(),
-        "completed_at": transaction.completed_at.isoformat() if transaction.completed_at else None,
-    }
-    
-    if is_admin:
-        data.update({
-            "card_last4": transaction.card_last4,
-            "card_brand": transaction.card_brand,
-            "metadata": transaction.metadata,
-            "notes": transaction.notes,
-            "receipt_url": transaction.receipt_url,
-            "refund_reason": transaction.refund_reason,
-            "parent_transaction_id": str(transaction.parent_transaction_id) if transaction.parent_transaction_id else None,
-        })
-    
-    return data
-
-
-def serialize_shipment_info(order, include_tracking: bool = True) -> Dict:
-    """Serialize shipment information for an order"""
-    data = {
-        "has_shipment": hasattr(order, 'shipment'),
-        "shipment_status": None,
-        "shipment_status_display": None,
-        "tracking_number": None,
-        "carrier": None,
-        "estimated_delivery": None,
-        "shipping_method": order.shipping_method,
-        "shipping_cost": float(order.shipping_cost),
-        "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
-        "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
-    }
-    
-    if hasattr(order, 'shipment'):
-        shipment = order.shipment
-        data.update({
-            "shipment_status": shipment.status,
-            "shipment_status_display": shipment.get_status_display(),
-            "tracking_number": shipment.tracking_number,
-            "carrier": shipment.carrier,
-            "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
-        })
-        
-        if include_tracking:
-            from apps.orders.selectors import get_shipment_tracking
-            tracking = get_shipment_tracking(str(shipment.id))
-            data["tracking_history"] = [
-                {
-                    "status": t.status,
-                    "status_display": dict(Shipment.STATUS_CHOICES).get(t.status, t.status),
-                    "location": t.location,
-                    "description": t.description,
-                    "created_at": t.created_at.isoformat(),
-                }
-                for t in tracking
-            ]
-    
-    return data
-
-
-def validate_shipment_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Validate shipment status update"""
-    errors = {}
-    cleaned = {}
-    
-    shipment_status = data.get('shipment_status')
-    if shipment_status:
-        valid_statuses = ['pending', 'processing', 'ready', 'shipped', 'in_transit', 'out_for_delivery', 'delivered', 'failed', 'returned']
-        if shipment_status not in valid_statuses:
-            errors['shipment_status'] = f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
-        else:
-            cleaned['shipment_status'] = shipment_status
-    
-    if 'tracking_number' in data:
-        cleaned['tracking_number'] = data['tracking_number']
-    
-    if 'carrier' in data:
-        cleaned['carrier'] = data['carrier']
-    
-    if 'location' in data:
-        cleaned['location'] = data['location']
-    
-    if 'description' in data:
-        cleaned['description'] = data['description']
-    
-    if errors:
-        return None, errors
-    
-    return cleaned, None
-
-
-def validate_refund_request(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-    """Validate refund request"""
-    errors = {}
-    cleaned = {}
-    
-    amount = data.get('amount')
-    if not amount:
-        errors['amount'] = "Amount is required"
-    else:
-        try:
-            cleaned['amount'] = Decimal(str(amount))
-            if cleaned['amount'] <= 0:
-                errors['amount'] = "Amount must be greater than 0"
-        except:
-            errors['amount'] = "Invalid amount"
-    
-    if 'refund_reason' in data:
-        cleaned['refund_reason'] = data['refund_reason']
-    
-    if 'admin_note' in data:
-        cleaned['admin_note'] = data['admin_note']
-    
-    if errors:
-        return None, errors
-    
-    return cleaned, None
-
-
-def serialize_pagination_metadata(pagination_meta: Dict) -> Dict:
-    """Serialize pagination metadata for API response"""
-    return {
-        "current_page": pagination_meta["current_page"],
-        "per_page": pagination_meta["per_page"],
-        "total": pagination_meta["total"],
-        "total_pages": pagination_meta["total_pages"],
-        "has_next": pagination_meta["has_next"],
-        "has_previous": pagination_meta["has_previous"],
-        "next_page": pagination_meta["next_page"],
-        "previous_page": pagination_meta["previous_page"],
-        "start_index": pagination_meta["start_index"],
-        "end_index": pagination_meta["end_index"],
-    }
-
-
-def serialize_shipment_list(shipments: List, is_admin: bool = False) -> List[Dict]:
-    """Serialize list of shipments for list view"""
-    return [
-        {
-            "id": str(s.id),
-            "order_number": s.order.order_number,
-            "order_id": str(s.order.id),
-            "customer_name": s.order.customer_name,
-            "customer_email": s.order.customer_email,
-            "status": s.status,
-            "status_display": s.get_status_display(),
-            "tracking_number": s.tracking_number,
-            "carrier": s.carrier,
-            "created_at": s.created_at.isoformat(),
-            "shipped_at": s.shipped_at.isoformat() if s.shipped_at else None,
-            "delivered_at": s.delivered_at.isoformat() if s.delivered_at else None,
-            "estimated_delivery": s.estimated_delivery.isoformat() if s.estimated_delivery else None,
-        }
-        for s in shipments
-    ]
-
-
-def serialize_transaction_list(transactions: List, is_admin: bool = False) -> List[Dict]:
-    """Serialize list of transactions for list view"""
-    return [serialize_transaction(t, is_admin=is_admin) for t in transactions]
