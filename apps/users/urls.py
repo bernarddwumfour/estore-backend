@@ -2,8 +2,66 @@
 
 from django.urls import path
 from . import views
+from apps.users.views.analytics_views import (
+    user_analytics_overview,
+    user_growth_trends,
+    user_engagement_analytics,
+    user_geographic_distribution,
+    user_activity_analytics,
+    affiliate_analytics,
+    affiliate_growth_trends,
+    customer_demographics,
+    top_customers_analytics,
+)
+
 
 urlpatterns = [
+     # User Analytics Endpoints
+    path(
+        "/admin/users/analytics/overview",
+        user_analytics_overview,
+        name="user-analytics-overview",
+    ),
+    path(
+        "/admin/users/analytics/growth-trends",
+        user_growth_trends,
+        name="user-analytics-growth-trends",
+    ),
+    path(
+        "/admin/users/analytics/engagement",
+        user_engagement_analytics,
+        name="user-analytics-engagement",
+    ),
+    path(
+        "/admin/users/analytics/geographic",
+        user_geographic_distribution,
+        name="user-analytics-geographic",
+    ),
+    path(
+        "/admin/users/analytics/activity",
+        user_activity_analytics,
+        name="user-analytics-activity",
+    ),
+    path(
+        "/admin/users/analytics/affiliates",
+        affiliate_analytics,
+        name="user-analytics-affiliates",
+    ),
+    path(
+        "/admin/users/analytics/affiliate-growth",
+        affiliate_growth_trends,
+        name="user-analytics-affiliate-growth",
+    ),
+    path(
+        "/admin/users/analytics/customer-demographics",
+        customer_demographics,
+        name="user-analytics-customer-demographics",
+    ),
+    path(
+        "/admin/users/analytics/top-customers",
+        top_customers_analytics,
+        name="user-analytics-top-customers",
+    ),
     # ==================== AUTHENTICATION ====================
     path("/register/customer", views.register_customer, name="register-customer"),
     path("/register/user", views.register_user, name="register-user"),
