@@ -3,7 +3,7 @@ User Analytics Selectors - Database read operations for user analytics
 No business logic - just queries
 """
 
-from django.db.models import Sum, Count, Avg, Q, F, Min, Max, OuterRef, Subquery, DecimalField, IntegerField, FloatField
+from django.db.models import Sum, Count, Avg, Q, Min, Max,  DecimalField, IntegerField
 from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, Coalesce
 from django.utils import timezone
 from datetime import datetime, timedelta
@@ -14,7 +14,7 @@ from apps.users.models.user import User
 from apps.users.models.address import Address
 from apps.users.models.affiliate import Affiliate
 from apps.users.models.customer import CustomerProfile
-from apps.orders.models import Order, OrderItem
+from apps.orders.models import Order
 
 
 class UserAnalyticsSelector:
