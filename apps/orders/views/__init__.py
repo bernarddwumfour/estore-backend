@@ -63,7 +63,16 @@ from .debug_views import (
     order_debug_info,
 )
 
+from .pos_views import (
+    pos_create_order,
+    pos_search_customers,
+    pos_get_active_promotions,
+)
+
 __all__ = [
+    'pos_create_order',
+    'pos_search_customers',
+    'pos_get_active_promotions',
     # Address views
     'get_user_addresses',
     'create_address',

@@ -1,4 +1,3 @@
-# apps/orders/services/order_service.py
 import logging
 from typing import Dict, Optional, List, Tuple
 from decimal import Decimal
@@ -6,7 +5,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from apps.orders.models import Order, OrderItem
-from apps.products.models import ProductVariant
+from apps.products.models import ProductVariant, Product
 from apps.users.models import Address, User
 from apps.orders.selectors import get_order_by_id, get_address_by_id
 
@@ -14,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class OrderService:
-    """Order business logic"""
+    """Order business logic - with price verification and bundle expansion"""
         
     @staticmethod
     @transaction.atomic
@@ -28,63 +27,125 @@ class OrderService:
         customer_note: str = "",
         currency: str = "GHS",
     ) -> Tuple[Optional[Order], Optional[Dict]]:
-        """Create a new order with automatic shipping calculation"""
+        """Create a new order - VERIFIES prices and EXPANDS bundles on server side"""
         try:
             from apps.orders.shipping_calculator import ShippingCalculator
             from apps.orders.payment_config import PaymentConfigService
+            from apps.promotions.models import Promotion
             
-            # Determine if user exists (for guest users, user is not None but is a guest user object)
             has_user = user is not None
             
-            # Calculate subtotal and collect variants
             subtotal = Decimal('0.00')
             order_items_data = []
             variants_for_weight = []
 
             for item_data in items:
-                try:
-                    variant = ProductVariant.objects.select_related('product').get(
-                        id=item_data['variant_id'],
-                        is_active=True,
-                    )
-                except ProductVariant.DoesNotExist:
-                    return None, {"items": f"Product variant not found: {item_data['variant_id']}"}
+                if item_data.get('is_bundle'):
+                    # Handle bundle/promotion - VERIFY bundle exists and is active
+                    bundle_id = item_data.get('bundle_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        promotion = Promotion.objects.get(id=bundle_id)
+                    except Promotion.DoesNotExist:
+                        return None, {"items": f"Promotion bundle not found: {bundle_id}"}
+                    
+                    # Verify promotion is active
+                    if promotion.status != Promotion.STATUS_ACTIVE:
+                        return None, {"items": f"Promotion {promotion.name} is not active"}
+                    
+                    # Verify promotion hasn't expired
+                    now = timezone.now()
+                    if promotion.starts_at > now:
+                        return None, {"items": f"Promotion {promotion.name} has not started yet"}
+                    if promotion.ends_at and promotion.ends_at < now:
+                        return None, {"items": f"Promotion {promotion.name} has expired"}
+                    
+                    # Verify client price matches server price
+                    client_price = Decimal(str(item_data.get('price', 0)))
+                    server_price = promotion.bundle_price
+                    
+                    if client_price != server_price:
+                        logger.warning(f"Price mismatch for bundle {promotion.name}: client={client_price}, server={server_price}")
+                        return None, {"items": f"Price mismatch for promotion bundle. Please refresh and try again."}
+                    
+                    # Expand bundle items
+                    for bundle_item in promotion.items.all():
+                        item_quantity = bundle_item.quantity * requested_quantity
+                        
+                        # Verify stock
+                        if bundle_item.variant.stock < item_quantity:
+                            return None, {"items": f"Insufficient stock for {bundle_item.variant.sku} in bundle {promotion.name}"}
+                        
+                        # Calculate price (free items have zero price)
+                        unit_price = Decimal('0.00') if bundle_item.is_free else bundle_item.original_price
+                        
+                        order_items_data.append({
+                            'variant': bundle_item.variant,
+                            'quantity': item_quantity,
+                            'unit_price': unit_price,
+                            'product_title': bundle_item.variant.product.title,
+                            'product_slug': bundle_item.variant.product.slug,
+                            'variant_attributes': bundle_item.variant.attributes,
+                            'sku': bundle_item.variant.sku,
+                            'is_bundle_item': True,
+                            'bundle_id': str(promotion.id),
+                            'bundle_name': promotion.name,
+                            'bundle_price': float(promotion.bundle_price),
+                        })
+                        
+                        subtotal += unit_price * Decimal(str(item_quantity))
+                        variants_for_weight.append({'variant': bundle_item.variant, 'quantity': item_quantity})
+                        
+                else:
+                    # Handle regular variant
+                    variant_id = item_data.get('variant_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        variant = ProductVariant.objects.select_related('product').get(
+                            id=variant_id, is_active=True
+                        )
+                    except ProductVariant.DoesNotExist:
+                        return None, {"items": f"Product variant not found: {variant_id}"}
+                    
+                    # Verify variant is active
+                    if not variant.is_active:
+                        return None, {"items": f"Variant {variant.sku} is no longer available"}
+                    
+                    # Verify product is published
+                    if variant.product.status != Product.STATUS_PUBLISHED:
+                        return None, {"items": f"Product {variant.product.title} is not available"}
+                    
+                    # Verify stock
+                    if variant.stock < requested_quantity:
+                        return None, {"items": f"Insufficient stock for {variant.sku}. Available: {variant.stock}"}
+                    
+                    unit_price = variant.discounted_price
+                    
+                    order_items_data.append({
+                        'variant': variant,
+                        'quantity': requested_quantity,
+                        'unit_price': unit_price,
+                        'product_title': variant.product.title,
+                        'product_slug': variant.product.slug,
+                        'variant_attributes': variant.attributes,
+                        'sku': variant.sku,
+                        'is_bundle_item': False,
+                    })
+                    
+                    subtotal += unit_price * Decimal(str(requested_quantity))
+                    variants_for_weight.append({'variant': variant, 'quantity': requested_quantity})
 
-                quantity = item_data.get('quantity', 1)
-                
-                # Check stock
-                if variant.stock < quantity:
-                    return None, {"items": f"Insufficient stock for {variant.sku}. Available: {variant.stock}"}
-
-                unit_price = variant.discounted_price
-                
-                order_items_data.append({
-                    'variant': variant,
-                    'quantity': quantity,
-                    'unit_price': unit_price,
-                    'product_title': variant.product.title,
-                    'product_slug': variant.product.slug,
-                    'variant_attributes': variant.attributes,
-                    'sku': variant.sku,
-                })
-                
-                subtotal += unit_price * Decimal(str(quantity))
-                variants_for_weight.append({'variant': variant, 'quantity': quantity})
-
-            # Create or get addresses - Always pass the user (even for guests)
-            # For guests, the user object exists (created by create_guest_checkout)
-            shipping_address = OrderService._create_or_get_address(
-                shipping_address_data, user, 'shipping'
-            )
+            # Create shipping address
+            shipping_address = OrderService._create_or_get_address(shipping_address_data, user, 'shipping')
             
             if billing_address_data:
-                billing_address = OrderService._create_or_get_address(
-                    billing_address_data, user, 'billing'
-                )
+                billing_address = OrderService._create_or_get_address(billing_address_data, user, 'billing')
             else:
                 billing_address = shipping_address
 
-            # Calculate shipping cost automatically
+            # Calculate shipping cost based on weight and destination
             total_weight = ShippingCalculator.calculate_order_weight(variants_for_weight)
             shipping_calculation = ShippingCalculator.calculate_shipping_cost(
                 country_code=shipping_address.country,
@@ -95,6 +156,8 @@ class OrderService:
             shipping_cost = shipping_calculation['cost']
             shipping_method = shipping_calculation['method_name']
             
+            logger.info(f"Shipping calculation: weight={total_weight}kg, cost=${shipping_cost}, method={shipping_method}")
+            
             # Calculate tax (simple example - customize as needed)
             tax_rate = Decimal('0.00')
             tax_amount = Decimal('0.00')
@@ -102,10 +165,9 @@ class OrderService:
             
             total = subtotal + shipping_cost + tax_amount - discount_amount
 
-            # Create order - Always associate with the user (even for guests)
-            # For guests, we use the user object that was created
+            # Create order
             order = Order.objects.create(
-                user=user,  # Always pass the user - for guests this is the guest user
+                user=user,
                 guest_email=guest_info.get('email', '') if guest_info else shipping_address.email,
                 guest_first_name=guest_info.get('first_name', '') if guest_info else shipping_address.first_name,
                 guest_last_name=guest_info.get('last_name', '') if guest_info else shipping_address.last_name,
@@ -135,6 +197,9 @@ class OrderService:
                     sku=item_data['sku'],
                     unit_price=item_data['unit_price'],
                     quantity=item_data['quantity'],
+                    is_bundle_item=item_data.get('is_bundle_item', False),
+                    bundle_id=item_data.get('bundle_id', ''),
+                    bundle_name=item_data.get('bundle_name', ''),
                 )
                 item_data['variant'].reduce_stock(item_data['quantity'])
 
@@ -162,12 +227,14 @@ class OrderService:
                 order.delete()
                 return None, {"payment_method": f"Unsupported payment method: {payment_method}"}
 
-            logger.info(f"Order created: {order.order_number} with shipping cost ${shipping_cost}")
+            logger.info(f"Order created: {order.order_number} with subtotal=${subtotal}, shipping=${shipping_cost}, total=${total}")
             return order, None
 
         except Exception as e:
             logger.error(f"Order creation error: {str(e)}")
             return None, {"general": f"Failed to create order: {str(e)}"}
+
+        
 
     @staticmethod
     def get_order_payment_options(order_id: str) -> Tuple[Optional[Dict], Optional[Dict]]:

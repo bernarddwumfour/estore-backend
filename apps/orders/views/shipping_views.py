@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 @require_http_methods(["POST"])
 @json_request_required
 def get_shipping_rates(request):
-    """Get real-time shipping rates from Terminal Africa"""
+    """Get real-time shipping rates - CALCULATES FROM DATABASE"""
     try:
         data = request.json_data
         
@@ -47,19 +47,25 @@ def get_shipping_rates(request):
             "address": shipping_address.get('address_line1', ''),
         }
         
+        from apps.products.models import ProductVariant
+        
         total_weight = Decimal('0.00')
+        subtotal = Decimal('0.00')
         
         for item in items:
             variant_id = item.get('variant_id')
             quantity = item.get('quantity', 1)
             
             try:
-                from apps.products.models import ProductVariant
-                variant = ProductVariant.objects.get(id=variant_id)
+                variant = ProductVariant.objects.get(id=variant_id, is_active=True)
+                
                 if variant.weight:
                     total_weight += Decimal(str(variant.weight)) * Decimal(str(quantity))
                 else:
                     total_weight += Decimal('0.5') * Decimal(str(quantity))
+                
+                subtotal += variant.discounted_price * Decimal(str(quantity))
+                
             except ProductVariant.DoesNotExist:
                 total_weight += Decimal('0.5') * Decimal(str(quantity))
         
@@ -79,18 +85,6 @@ def get_shipping_rates(request):
         )
         
         if error or not rates:
-            subtotal = Decimal('0.00')
-            
-            for item in items:
-                variant_id = item.get('variant_id')
-                quantity = item.get('quantity', 1)
-                try:
-                    from apps.products.models import ProductVariant
-                    variant = ProductVariant.objects.get(id=variant_id)
-                    subtotal += variant.price * Decimal(str(quantity))
-                except ProductVariant.DoesNotExist:
-                    pass
-            
             from apps.orders.shipping_calculator import ShippingCalculator
             rates = ShippingCalculator.get_shipping_options(
                 country_code=destination['country'],
@@ -120,12 +114,13 @@ def get_shipping_rates(request):
                 "origin": origin,
                 "destination": destination,
                 "weight_kg": float(total_weight),
+                "subtotal": float(subtotal),
             },
             message="Shipping rates retrieved successfully"
         )
         
     except Exception as e:
-        logger.error(f"Get shipping rates error: {str(e)}")
+        logger.error(f"Get shipping rates error: {str(e)}", exc_info=True)
         return APIResponse.server_error()
 
 
@@ -133,51 +128,56 @@ def get_shipping_rates(request):
 @require_http_methods(["POST"])
 @json_request_required
 def get_shipping_options(request):
-    """Get shipping options based on internal calculation"""
+    """Get shipping options based on internal calculation - CALCULATES SUBTOTAL FROM DB"""
     try:
         data = request.json_data
         
         country_code = data.get('country_code', 'GH')
-        subtotal = data.get('subtotal', 0)
         items = data.get('items', [])
         
         if not items:
             return APIResponse.bad_request("Items are required")
         
         from apps.orders.shipping_calculator import ShippingCalculator
+        from apps.products.models import ProductVariant
+        from decimal import Decimal
         
         total_weight = Decimal('0.00')
+        subtotal = Decimal('0.00')
         
         for item in items:
             variant_id = item.get('variant_id')
             quantity = item.get('quantity', 1)
             
             try:
-                from apps.products.models import ProductVariant
-                variant = ProductVariant.objects.get(id=variant_id)
+                variant = ProductVariant.objects.get(id=variant_id, is_active=True)
+                
                 if variant.weight:
                     total_weight += Decimal(str(variant.weight)) * Decimal(str(quantity))
                 else:
                     total_weight += Decimal('0.5') * Decimal(str(quantity))
+                
+                subtotal += variant.discounted_price * Decimal(str(quantity))
+                
             except ProductVariant.DoesNotExist:
                 total_weight += Decimal('0.5') * Decimal(str(quantity))
         
         options = ShippingCalculator.get_shipping_options(
             country_code=country_code,
             total_weight_kg=total_weight,
-            subtotal=Decimal(str(subtotal)),
+            subtotal=subtotal,
         )
         
         return APIResponse.success(
             data={
                 "options": options,
                 "weight_kg": float(total_weight),
-                "subtotal": subtotal,
+                "subtotal": float(subtotal),
                 "country": country_code,
             },
             message="Shipping options retrieved successfully"
         )
         
     except Exception as e:
-        logger.error(f"Get shipping options error: {str(e)}")
+        logger.error(f"Get shipping options error: {str(e)}", exc_info=True)
         return APIResponse.server_error()

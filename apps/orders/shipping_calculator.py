@@ -1,7 +1,7 @@
 # apps/orders/services/shipping_calculator.py
 import logging
 from decimal import Decimal
-from typing import Dict, Any,  List
+from typing import Dict, Any, List
 
 logger = logging.getLogger(__name__)
 
@@ -14,7 +14,7 @@ class ShippingCalculator:
         'GH': {  # Ghana
             'base': Decimal('15.00'),
             'per_kg': Decimal('5.00'),
-            'free_shipping_threshold': Decimal('100.00'),
+            'free_shipping_threshold': Decimal('500.00'),
         },
         'NG': {  # Nigeria
             'base': Decimal('20.00'),
@@ -34,7 +34,7 @@ class ShippingCalculator:
         'DEFAULT': {
             'base': Decimal('30.00'),
             'per_kg': Decimal('10.00'),
-            'free_shipping_threshold': Decimal('250.00'),
+            'free_shipping_threshold': Decimal('500.00'),
         },
     }
     

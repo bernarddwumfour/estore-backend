@@ -192,4 +192,10 @@ urlpatterns = [
     path("/shipping/rates", views.get_shipping_rates, name="shipping-rates"),
     path("/shipping/options", views.get_shipping_options, name="shipping-options"),
     path("/<str:order_id>", views.order_detail, name="order-detail"),
+    
+    
+    # ==================== POS (Point of Sale) ENDPOINTS ====================
+    path("/admin/pos/orders/create", views.pos_create_order, name="pos-create-order"),
+    path("/admin/pos/customers/search", views.pos_search_customers, name="pos-search-customers"),
+    path("/admin/pos/promotions", views.pos_get_active_promotions, name="pos-get-promotions"),
 ]

@@ -325,6 +325,16 @@ class OrderItem(models.Model):
         _("total price"), max_digits=10, decimal_places=2, default=0.00
     )
     
+    is_bundle_item = models.BooleanField(_("is bundle item"), default=False)
+    bundle_id = models.CharField(_("bundle ID"), max_length=100, blank=True, null=True)
+    bundle_name = models.CharField(_("bundle name"), max_length=200, blank=True)
+    bundle_discount = models.DecimalField(
+        _("bundle discount"),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00
+    )
+    
    
     class Meta:
         db_table = "order_items"

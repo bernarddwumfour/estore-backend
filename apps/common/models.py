@@ -36,8 +36,8 @@ class SystemLog(models.Model):
     
     # Request context
     ip_address = models.GenericIPAddressField(_("IP address"), blank=True, null=True)
-    path = models.CharField(_("request path"), max_length=500, blank=True)
-    method = models.CharField(_("HTTP method"), max_length=10, blank=True)
+    path = models.CharField(_("request path"), max_length=500, blank=True,null=True)
+    method = models.CharField(_("HTTP method"), max_length=10, blank=True,null=True)
     
     # Additional data (limited size)
     extra_data = models.JSONField(_("extra data"), default=dict, blank=True)

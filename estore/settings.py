@@ -106,6 +106,7 @@ INSTALLED_APPS = [
     "apps.products",
     "apps.orders",
     "apps.common",
+    "apps.promotions",
     "api",
 ]
 

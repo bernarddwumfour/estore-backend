@@ -29,6 +29,7 @@ urlpatterns = [
                 # Authentication & Users
                 path("users", include("apps.users.urls")),
                 path("products", include("apps.products.urls")),
+                path("promotions", include("apps.promotions.urls")),
                 path("orders", include("apps.orders.urls")),
                 path("common", include("apps.common.urls")),
             ]

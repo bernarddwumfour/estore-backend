@@ -88,21 +88,28 @@ def admin_order_list(request):
 @jwt_required
 @role_required("admin", "staff")
 def admin_order_detail(request, order_id):
-    """Admin: Get order details"""
+    """Admin: Get order details with shipping cost and bundle grouping"""
     try:
         order = get_order_by_id(order_id, include_cancelled=True)
         if not order:
             return APIResponse.not_found("Order not found")
 
+        # serialize_order already handles bundle grouping
+        order_data = serialize_order(order, is_admin=True, detailed=True)
+        
+        # Ensure shipping cost is explicitly included (already in serialize_order but double-check)
+        order_data["shipping_cost"] = float(order.shipping_cost)
+        order_data["shipping_method"] = order.shipping_method
+        
         return APIResponse.success(
-            data=serialize_order(order, is_admin=True, detailed=True),
+            data=order_data,
             message="Order retrieved successfully",
         )
 
     except Exception as e:
-        logger.error(f"Admin order detail error: {str(e)}")
+        logger.error(f"Admin order detail error: {str(e)}", exc_info=True)
         return APIResponse.server_error()
-
+    
 
 @csrf_exempt
 @require_http_methods(["GET"])
