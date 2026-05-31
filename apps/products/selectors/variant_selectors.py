@@ -3,11 +3,10 @@ Variant Selectors - Database read operations for variants
 No business logic - just queries
 """
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict,  Tuple
 from django.db.models import Q
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.products.models import ProductVariant, Product
-from ..schemas import serialize_variant
 
 
 # ==================== VARIANT SELECTORS ====================

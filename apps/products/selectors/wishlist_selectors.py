@@ -3,9 +3,9 @@ Wishlist Selectors - Database read operations for wishlists
 No business logic - just queries
 """
 
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Tuple
 from apps.products.models import Wishlist
-from ..schemas import serialize_product, serialize_variant, serialize_wishlist_item
+from ..schemas import serialize_product, serialize_variant
 
 
 # ==================== WISHLIST SELECTORS ====================

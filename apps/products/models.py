@@ -5,11 +5,11 @@ E-commerce Product System with Variants
 """
 
 import uuid
-from django.db import models
+from django.db import models 
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth import get_user_model
-
+from decimal import Decimal 
 User = get_user_model()
 
 
@@ -294,6 +294,15 @@ class ProductVariant(models.Model):
         default=dict,
         help_text=_("Specific attributes for this variant"),
     )
+    
+    cost_price = models.DecimalField(
+        _("cost price"),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)],
+        help_text=_("Wholesale cost - never exposed to customers")
+    )
 
     # Pricing
     price = models.DecimalField(
@@ -407,6 +416,40 @@ class ProductVariant(models.Model):
         """Increase stock by quantity"""
         self.stock += quantity
         self.save(update_fields=["stock"])
+        
+    @property
+    def gross_profit(self) -> Decimal:
+        """Gross profit per unit (selling price - cost)"""
+        return self.discounted_price - self.cost_price
+    
+    @property
+    def margin_percentage(self) -> float:
+        """Profit margin percentage"""
+        if self.discounted_price == 0:
+            return 0.0
+        return float((self.gross_profit / self.discounted_price) * 100)
+    
+    @property
+    def markup_percentage(self) -> float:
+        """Markup percentage over cost"""
+        if self.cost_price == 0:
+            return 0.0
+        return float((self.gross_profit / self.cost_price) * 100)
+    
+    @property
+    def inventory_cost_value(self) -> Decimal:
+        """Total cost value of current inventory"""
+        return self.cost_price * self.stock
+    
+    @property
+    def potential_revenue(self) -> Decimal:
+        """Potential revenue if all stock sold"""
+        return self.discounted_price * self.stock
+    
+    @property
+    def potential_profit(self) -> Decimal:
+        """Potential profit if all stock sold"""
+        return self.gross_profit * self.stock
 
 
 class VariantImage(models.Model):

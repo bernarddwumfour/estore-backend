@@ -3,7 +3,7 @@ Review Selectors - Database read operations for reviews
 No business logic - just queries
 """
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import  List, Dict, Any, Tuple
 from django.db.models import Avg
 from django.core.paginator import Paginator
 from apps.products.models import ProductReview

@@ -2,7 +2,7 @@
 Product Schemas - Serialization for products
 """
 
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List
 from apps.products.models import Product
 from .variant_schemas import serialize_variant
 

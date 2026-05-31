@@ -1,24 +1,26 @@
 import json
 import logging
+import time
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django_ratelimit.decorators import ratelimit
 
-# Your existing decorators
 from apps.users.decorators.auth import (
     json_request_required,
     jwt_required,
-    multipart_request_allowed,
     role_required,
 )
-from estore.utils.responses import APIResponse  # Your existing response class
-from ..services.product_service import (
-    CategoryService,
-)
-from ..models import ProductVariant
+from estore.utils.responses import APIResponse
+from ..services.product_service import CategoryService
+from apps.common.utils import coerce_bool
 from ..models import Product
-
+from apps.common.utils import sanitize_search_query
+from apps.common.logging import log_action, LogSeverity, get_user_info
 
 logger = logging.getLogger(__name__)
+
+# App name constant for filtering in UI
+APP_NAME = "products"
 
 
 def _is_admin(request) -> bool:
@@ -28,14 +30,73 @@ def _is_admin(request) -> bool:
     return getattr(request.user, "role", "customer") in ["admin", "staff"]
 
 
+def _log_category_request(request, action, start_time, status_code, extra=None):
+    """Helper to log category requests consistently with app field"""
+    duration_ms = (time.time() - start_time) * 1000
+    user = request.user if hasattr(request, 'user') else None
+    
+    log_data = {
+        "duration_ms": round(duration_ms, 2),
+        "path": request.path,
+        "method": request.method,
+        "user_role": getattr(user, 'role', 'unknown') if user else 'anonymous',
+        "user_id": str(user.id) if user and hasattr(user, 'id') else None,
+    }
+    if extra:
+        log_data.update(extra)
+    
+    if status_code < 400:
+        severity = LogSeverity.INFO
+        description = "Category request successful"
+    elif status_code == 429:
+        severity = LogSeverity.WARNING
+        description = "Category request rate limited"
+    elif status_code < 500:
+        severity = LogSeverity.WARNING
+        description = "Category request failed - invalid parameters"
+    else:
+        severity = LogSeverity.ERROR
+        description = "Category request failed with server error"
+    
+    log_action(
+        logger=logger,
+        severity=severity,
+        action=action,
+        description=description,
+        status_code=status_code,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra=log_data
+    )
+
+
 @csrf_exempt
 @require_http_methods(["GET"])
+@ratelimit(key='ip', rate='200/h', method='GET', block=True)
 def category_list(request):
+    """Public: Get paginated category list with filtering"""
+    start_time = time.time()
+    action = "category_list"
+    user = request.user if hasattr(request, 'user') else None
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description="Request started - retrieving category list",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time}
+    )
+    
     try:
         from apps.products.selectors import get_all_categories
         from apps.products.schemas import serialize_category_list
         
-        search = request.GET.get('search', None)
+        search = sanitize_search_query(request.GET.get("search", ""))
         parent_id = request.GET.get('parent_id', None)
         include_product_counts = request.GET.get('include_counts', 'true').lower() == 'true'
         as_tree = request.GET.get('as_tree', 'false').lower() == 'true'
@@ -80,17 +141,18 @@ def category_list(request):
                 category_data['product_count'] = categories[i].product_count if hasattr(categories[i], 'product_count') else 0
         
         if as_tree:
-          
+            TREE_MAX_LIMIT = 200
+            
             all_categories, total_all, _ = get_all_categories(
                 only_active=True,
                 is_admin=False,
                 search=search,
-                parent_id=None,  # Get all for tree building
+                parent_id=None,
                 is_hidden=None,
                 sort_by="name",
                 sort_order="asc",
                 page=1,
-                limit=1000  # Large limit for tree
+                limit=TREE_MAX_LIMIT 
             )
             
             all_categories_data = serialize_category_list(all_categories, is_admin=False)
@@ -117,20 +179,50 @@ def category_list(request):
         if as_tree:
             response_data.pop('pagination', None)
         
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "total_categories": total,
+                "as_tree": as_tree,
+                "include_counts": include_product_counts,
+                "search_term": search if search else None,
+                "parent_id": parent_id,
+                "requested_by": get_user_info(user)
+            }
+        )
+        
         return APIResponse.success(
             data=response_data,
             message="Categories retrieved successfully"
         )
         
     except Exception as e:
-        logger.error(f"Category list error: {str(e)}")
+        logger.error(f"Category list error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"error": str(e)})
         return APIResponse.server_error()
-    
+
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@ratelimit(key='ip', rate='200/h', method='GET', block=True)
 def category_detail(request, slug):
     """Get detailed category information (hide hidden from customers)"""
+    start_time = time.time()
+    action = "category_detail"
+    user = request.user if hasattr(request, 'user') else None
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description=f"Request started - retrieving category detail for slug: {slug}",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time, "slug": slug}
+    )
+    
     try:
         is_admin = _is_admin(request)
         
@@ -138,10 +230,18 @@ def category_detail(request, slug):
         category = get_category_by_slug(slug, only_active=True, is_admin=is_admin)
         
         if not category:
+            _log_category_request(
+                request, action, start_time, 404,
+                extra={"slug": slug, "reason": "Category not found"}
+            )
             return APIResponse.not_found("Category not found")
         
         # If category is hidden and user is not admin, 404
         if category.is_hidden and not is_admin:
+            _log_category_request(
+                request, action, start_time, 404,
+                extra={"slug": slug, "category_id": str(category.id), "reason": "Category is hidden"}
+            )
             return APIResponse.not_found("Category not found")
         
         from apps.products.schemas import serialize_category
@@ -172,31 +272,58 @@ def category_detail(request, slug):
         
         category_data["subcategories"] = subcategories_data
         
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "category_id": str(category.id),
+                "category_name": category.name,
+                "slug": slug,
+                "subcategories_count": len(subcategories_data),
+                "is_hidden": category.is_hidden,
+                "is_admin_access": is_admin,
+                "requested_by": get_user_info(user)
+            }
+        )
+        
         return APIResponse.success(category_data)
         
     except Exception as e:
-        logger.error(f"Category detail error: {str(e)}")
+        logger.error(f"Category detail error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"slug": slug, "error": str(e)})
         return APIResponse.server_error()
 
 
-
-# apps/products/views.py - Separate admin category views
-
 # ==================== ADMIN CATEGORY VIEWS ====================
-# apps/products/views.py (update the admin_category_list view)
 
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def admin_category_list(request):
     """Admin: List all categories with filters, search, sorting, and pagination"""
+    start_time = time.time()
+    action = "admin_category_list"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description="Request started - admin retrieving category list",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time}
+    )
+    
     try:
         from apps.products.selectors import get_all_categories
         from apps.products.schemas import serialize_category_list, serialize_pagination_metadata
         
         # Get query parameters
-        search = request.GET.get('search', None)
+        search = sanitize_search_query(request.GET.get("search", ""))
         parent_id = request.GET.get('parent_id', None)
         is_hidden_param = request.GET.get('is_hidden', None)
         is_active_param = request.GET.get('is_active', None)
@@ -239,6 +366,22 @@ def admin_category_list(request):
             limit=limit
         )
         
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "total_categories": total,
+                "page": page,
+                "limit": limit,
+                "search_term": search if search else None,
+                "parent_id": parent_id,
+                "is_hidden_filter": is_hidden,
+                "only_active": only_active,
+                "sort_by": sort_by,
+                "sort_order": sort_order,
+                "requested_by": get_user_info(user)
+            }
+        )
+        
         return APIResponse.success(
             {
                 "categories": serialize_category_list(categories, is_admin=True),
@@ -248,29 +391,66 @@ def admin_category_list(request):
             "Categories retrieved successfully"
         )
     except Exception as e:
-        logger.error(f"Admin category list error: {str(e)}")
+        logger.error(f"Admin category list error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"error": str(e)})
         return APIResponse.server_error()
-    
-    
+
 
 @csrf_exempt
 @require_http_methods(["GET"])
 @jwt_required
 @role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def admin_category_detail(request, category_id):
     """Admin: Get single category details"""
+    start_time = time.time()
+    action = "admin_category_detail"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description=f"Request started - admin retrieving category detail for ID: {category_id}",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time, "category_id": category_id}
+    )
+    
     try:
         from apps.products.selectors import get_category_by_id
         from apps.products.schemas import serialize_category
         
         category = get_category_by_id(category_id, is_admin=True)
         if not category:
+            _log_category_request(
+                request, action, start_time, 404,
+                extra={"category_id": category_id, "reason": "Category not found"}
+            )
             return APIResponse.not_found("Category not found")
         
         category_data = serialize_category(category, is_admin=True)
+        
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "category_id": str(category.id),
+                "category_name": category.name,
+                "slug": category.slug,
+                "is_active": category.is_active,
+                "is_hidden": category.is_hidden,
+                "has_parent": bool(category.parent),
+                "has_children": category.children.exists(),
+                "requested_by": get_user_info(user)
+            }
+        )
+        
         return APIResponse.success(category_data, "Category details retrieved")
     except Exception as e:
-        logger.error(f"Admin category detail error: {str(e)}")
+        logger.error(f"Admin category detail error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"category_id": category_id, "error": str(e)})
         return APIResponse.server_error()
 
 
@@ -278,8 +458,25 @@ def admin_category_detail(request, category_id):
 @require_http_methods(["POST"])
 @jwt_required
 @role_required("admin", "staff")
+@ratelimit(key='user', rate='50/h', method='POST', block=True)
 def admin_category_create(request):
     """Admin: Create new category"""
+    start_time = time.time()
+    action = "admin_category_create"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description="Request started - admin creating new category",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time}
+    )
+    
     try:
         from apps.products.services.product_service import CategoryService
         
@@ -294,14 +491,21 @@ def admin_category_create(request):
         # Extract data with proper defaults
         name = data.get("name")
         if not name:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"error": "Category name is required"}
+            )
             return APIResponse.bad_request("Category name is required")
+        
+        is_active = coerce_bool(data.get("is_active"), default=True)
+        is_hidden = coerce_bool(data.get("is_hidden"), default=False)
         
         category, errors = CategoryService.create_category(
             name=name,
             description=data.get("description", ""),
             parent_id=data.get("parent_id"),
-            is_active=data.get("is_active", "true").lower() == "true",
-            is_hidden=data.get("is_hidden", "false").lower() == "true",
+            is_active=is_active,
+            is_hidden=is_hidden,
             meta_title=data.get("meta_title", ""),
             meta_description=data.get("meta_description", ""),
             image_file=image_file,
@@ -309,7 +513,24 @@ def admin_category_create(request):
         )
         
         if errors:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"errors": errors, "name": name}
+            )
             return APIResponse.validation_error(errors)
+        
+        _log_category_request(
+            request, action, start_time, 201,
+            extra={
+                "category_id": str(category.id),
+                "category_name": category.name,
+                "slug": category.slug,
+                "is_hidden": category.is_hidden,
+                "parent_id": data.get("parent_id"),
+                "has_image": bool(image_file),
+                "requested_by": get_user_info(user)
+            }
+        )
         
         return APIResponse.created(
             data={
@@ -321,34 +542,49 @@ def admin_category_create(request):
             message="Category created successfully"
         )
     except json.JSONDecodeError:
+        _log_category_request(request, action, start_time, 400, extra={"error": "Invalid JSON data"})
         return APIResponse.bad_request("Invalid JSON data")
     except Exception as e:
-        logger.error(f"Admin category create error: {str(e)}")
+        logger.error(f"Admin category create error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"error": str(e)})
         return APIResponse.server_error()
 
 
 @csrf_exempt
-@require_http_methods(["POST", "PUT"])  # Support both POST (with _method) and PUT
+@require_http_methods(["POST", "PUT"])
 @jwt_required
 @role_required("admin", "staff")
+@ratelimit(key='user', rate='50/h', method='POST', block=True)
+@ratelimit(key='user', rate='50/h', method='PUT', block=True)
 def admin_category_update(request, category_id):
     """Admin: Update category"""
-    try:    
-        
+    start_time = time.time()
+    action = "admin_category_update"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description=f"Request started - admin updating category ID: {category_id}",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time, "category_id": category_id}
+    )
+    
+    try:
         # Parse data based on content type
         if request.content_type and 'multipart/form-data' in request.content_type:
-            # For POST with multipart, request.POST works
             if request.method == "POST":
                 data = request.POST.dict()
                 image_file = request.FILES.get('image')
             else:
-                # For PUT with multipart, we need to parse manually
-                # Let's require POST with _method=PUT instead
                 return APIResponse.bad_request(
                     "For image updates, please use POST with _method=PUT parameter"
                 )
         else:
-            # JSON data (works for both POST and PUT)
             data = json.loads(request.body)
             image_file = None
         
@@ -377,6 +613,10 @@ def admin_category_update(request, category_id):
             update_data['meta_description'] = data['meta_description']
         
         if not update_data:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"error": "No data provided for update", "category_id": category_id}
+            )
             return APIResponse.bad_request("No data provided for update")
         
         # Handle image removal flag
@@ -391,7 +631,25 @@ def admin_category_update(request, category_id):
         )
         
         if errors:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"errors": errors, "category_id": category_id}
+            )
             return APIResponse.validation_error(errors)
+        
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "category_id": str(category.id),
+                "category_name": category.name,
+                "slug": category.slug,
+                "is_hidden": category.is_hidden,
+                "updated_fields": list(update_data.keys()),
+                "has_image_update": bool(image_file),
+                "image_removed": remove_image,
+                "requested_by": get_user_info(user)
+            }
+        )
         
         return APIResponse.success(
             data={
@@ -403,9 +661,11 @@ def admin_category_update(request, category_id):
             message="Category updated successfully"
         )
     except json.JSONDecodeError:
+        _log_category_request(request, action, start_time, 400, extra={"error": "Invalid JSON data"})
         return APIResponse.bad_request("Invalid JSON data")
     except Exception as e:
-        logger.error(f"Admin category update error: {str(e)}")
+        logger.error(f"Admin category update error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"category_id": category_id, "error": str(e)})
         return APIResponse.server_error()
 
 
@@ -413,41 +673,107 @@ def admin_category_update(request, category_id):
 @require_http_methods(["DELETE"])
 @jwt_required
 @role_required("admin", "staff")
+@ratelimit(key='user', rate='20/h', method='DELETE', block=True)
 def admin_category_delete(request, category_id):
     """Admin: Delete category"""
+    start_time = time.time()
+    action = "admin_category_delete"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description=f"Request started - admin deleting category ID: {category_id}",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time, "category_id": category_id}
+    )
+    
     try:
         from apps.products.selectors import get_category_by_id
         from apps.products.models import Product
         
         category = get_category_by_id(category_id, is_admin=True)
         if not category:
+            _log_category_request(
+                request, action, start_time, 404,
+                extra={"category_id": category_id, "reason": "Category not found"}
+            )
             return APIResponse.not_found("Category not found")
         
         # Check for subcategories
         if category.children.exists():
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={
+                    "category_id": category_id,
+                    "category_name": category.name,
+                    "reason": "Has subcategories",
+                    "subcategories_count": category.children.count()
+                }
+            )
             return APIResponse.bad_request("Cannot delete category with subcategories")
         
         # Check for products
-        if Product.objects.filter(category=category).exists():
+        product_count = Product.objects.filter(category=category).count()
+        if product_count > 0:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={
+                    "category_id": category_id,
+                    "category_name": category.name,
+                    "reason": "Has products",
+                    "products_count": product_count
+                }
+            )
             return APIResponse.bad_request("Cannot delete category with products")
         
+        category_name = category.name
         category.delete()
         
-        logger.info(f"Category deleted by admin {request.user.email}: {category.name}")
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "category_id": category_id,
+                "category_name": category_name,
+                "requested_by": get_user_info(user)
+            }
+        )
         
         return APIResponse.success(message="Category deleted successfully")
     except Exception as e:
-        logger.error(f"Admin category delete error: {str(e)}")
+        logger.error(f"Admin category delete error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"category_id": category_id, "error": str(e)})
         return APIResponse.server_error()
-    
-    
+
+
 @csrf_exempt
 @require_http_methods(["POST"])
 @jwt_required
 @role_required("admin", "staff")
 @json_request_required
+@ratelimit(key='user', rate='30/h', method='POST', block=True)
 def admin_category_bulk_action(request):
     """Admin: Perform bulk actions on categories"""
+    start_time = time.time()
+    action = "admin_category_bulk_action"
+    user = request.user
+    
+    log_action(
+        logger=logger,
+        severity=LogSeverity.DEBUG,
+        action=action,
+        description="Request started - admin bulk action on categories",
+        status_code=0,
+        user=user,
+        request=request,
+        app_name=APP_NAME,
+        extra={"start_time": start_time}
+    )
+    
     try:
         from apps.products.schemas import validate_bulk_action, serialize_bulk_action_result
         from apps.products.services.product_service import CategoryService
@@ -455,6 +781,10 @@ def admin_category_bulk_action(request):
         # Validate request data
         cleaned, errors = validate_bulk_action(request.json_data)
         if errors:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"errors": errors}
+            )
             return APIResponse.validation_error(errors)
         
         # Execute bulk action
@@ -465,16 +795,30 @@ def admin_category_bulk_action(request):
         )
         
         if error:
+            _log_category_request(
+                request, action, start_time, 400,
+                extra={"error": error, "action": cleaned['action']}
+            )
             return APIResponse.validation_error(error)
         
         # Serialize and return response
         serialized_results = serialize_bulk_action_result(results)
         
         if serialized_results['failed_count'] == 0:
-            print("BULKKK",serialized_results["failed_count"])
             message = f"Successfully {cleaned['action']}ed {serialized_results['success_count']} categories"
         else:
             message = f"Processed {serialized_results['success_count']} successfully, {serialized_results['failed_count']} failed"
+        
+        _log_category_request(
+            request, action, start_time, 200,
+            extra={
+                "action": cleaned['action'],
+                "total_categories": len(cleaned['category_ids']),
+                "success_count": serialized_results['success_count'],
+                "failed_count": serialized_results['failed_count'],
+                "requested_by": get_user_info(user)
+            }
+        )
         
         return APIResponse.success(
             data=serialized_results,
@@ -482,7 +826,6 @@ def admin_category_bulk_action(request):
         )
         
     except Exception as e:
-        logger.error(f"Admin category bulk action error: {str(e)}")
+        logger.error(f"Admin category bulk action error: {str(e)}", exc_info=True)
+        _log_category_request(request, action, start_time, 500, extra={"error": str(e)})
         return APIResponse.server_error()
-    
-    

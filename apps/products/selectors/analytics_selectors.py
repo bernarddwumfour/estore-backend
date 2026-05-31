@@ -2,12 +2,12 @@
 Product Analytics Selectors - Comprehensive e-commerce analytics
 """
 
-from django.db.models import Sum, Count, Avg, Q, F, Min, Max, OuterRef, Subquery
-from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, Coalesce
+from django.db.models import Sum, Count, Avg, Q, F, Min, Max
+from django.db.models.functions import TruncDay,  Coalesce
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Dict, List, Optional, Any
 
 from apps.products.models import (
     Product,

@@ -248,6 +248,18 @@ def validate_variant_create(
     # Admin-only fields
     if is_admin:
         discount_amount = data.get("discount_amount", 0)
+        if "cost_price" in data and data["cost_price"] is not None:
+            try:
+                cost_price = Decimal(str(data["cost_price"]))
+                if cost_price < 0:
+                    errors["cost_price"] = "Cannot be negative"
+                else:
+                    cleaned["cost_price"] = cost_price
+            except (InvalidOperation, TypeError, ValueError):
+                errors["cost_price"] = "Valid decimal number required"
+        else:
+            cleaned["cost_price"] = Decimal("0.00")
+            
         try:
             discount_amount = Decimal(str(discount_amount))
             if discount_amount < 0:

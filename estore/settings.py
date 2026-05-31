@@ -21,6 +21,8 @@ DEBUG = config("DEBUG", default=True, cast=bool)
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 
+RATELIMIT_ENABLE = True
+
 
 PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
 PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '')
@@ -48,6 +50,44 @@ DEFAULT_SHIPPING_ORIGIN = {
     "postal_code": "00233",
     "address": "Your Warehouse Address, Accra, Ghana",
 }
+
+CACHES = {
+    'default': {
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'unique-snowflake',
+    }
+}
+
+
+# CACHES = {
+#     'default': {
+#         'BACKEND': 'django_redis.cache.RedisCache',
+#         'LOCATION': 'redis://127.0.0.1:6379/1',
+#         'OPTIONS': {
+#             'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+#         },
+#     }
+# }
+
+
+RATELIMIT_USE_CACHE = 'default'
+RATELIMIT_VIEW = 'apps.common.views.rate_limit_exceeded'
+RATELIMIT_HEADERS_ENABLED = True
+
+# ==================== RATE LIMIT EXEMPTIONS (Optional) ====================
+
+# RATELIMIT_EXEMPT_IPS = [
+#     '127.0.0.1',
+#     '::1',
+# ]
+
+# # URLs that bypass rate limiting (health checks, webhooks)
+# RATELIMIT_EXEMPT_PATHS = [
+#     '/health',
+#     '/metrics',
+# ]
+
+
 # ------------------------------------------------------------------------------
 INSTALLED_APPS = [
     # Django
@@ -65,6 +105,7 @@ INSTALLED_APPS = [
     "apps.users",
     "apps.products",
     "apps.orders",
+    "apps.common",
     "api",
 ]
 
@@ -242,8 +283,8 @@ LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
     "formatters": {
-        "verbose": {
-            "format": "{levelname} {asctime} {module} {process:d} {thread:d} {message}",
+        "simple": {
+            "format": "{levelname} {asctime} {message}",
             "style": "{",
         },
     },
@@ -251,23 +292,30 @@ LOGGING = {
         "console": {
             "level": "INFO",
             "class": "logging.StreamHandler",
-            "formatter": "verbose",
+            "formatter": "simple",
         },
     },
     "root": {
         "handlers": ["console"],
-        "level": "INFO",
+        "level": "WARNING",  # Only show warnings and errors
+    },
+    "loggers": {
+        "django_ratelimit": {
+            "level": "INFO",
+            "handlers": ["console"],
+            "propagate": False,
+        },
     },
 }
 
 # 2. Only add File Logging if NOT on Render (Local Development)
-if not os.environ.get('RENDER'):
-    LOGGING['handlers']['file'] = {
-        "level": "INFO",
-        "class": "logging.FileHandler",
-        "filename": BASE_DIR / "logs/django.log",
-    }
-    LOGGING['root']['handlers'].append('file')
+# if not os.environ.get('RENDER'):
+#     LOGGING['handlers']['file'] = {
+#         "level": "INFO",
+#         "class": "logging.FileHandler",
+#         "filename": BASE_DIR / "logs/django.log",
+#     }
+#     LOGGING['root']['handlers'].append('file')
 
 
 # Email Configuration

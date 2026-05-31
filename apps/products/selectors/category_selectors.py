@@ -3,7 +3,7 @@ Category Selectors - Database read operations for categories
 No business logic - just queries
 """
 
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Tuple
 from django.db.models import Q
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.products.models import Category
