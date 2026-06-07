@@ -67,9 +67,19 @@ from .pos_views import (
     pos_create_order,
     pos_search_customers,
     pos_get_active_promotions,
+    pos_get_customer_addresses,
+    pos_create_customer_address,
+    pos_update_customer_address,
+    pos_delete_customer_address,
+    pos_calculate_shipping_for_address
 )
 
 __all__ = [
+    'pos_calculate_shipping_for_address',
+    'pos_delete_customer_address',
+    'pos_update_customer_address',
+    'pos_create_customer_address',
+    'pos_get_customer_addresses',
     'pos_create_order',
     'pos_search_customers',
     'pos_get_active_promotions',

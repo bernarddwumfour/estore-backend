@@ -544,7 +544,7 @@ class ProductReview(models.Model):
     helpful_no = models.PositiveIntegerField(_("helpful no votes"), default=0)
 
     # Moderation
-    is_approved = models.BooleanField(_("approved"), default=True)
+    is_approved = models.BooleanField(_("approved"), default=False)
     is_edited = models.BooleanField(_("edited"), default=False)
 
     created_at = models.DateTimeField(_("created at"), auto_now_add=True, db_index=True)
@@ -591,6 +591,189 @@ class ProductReview(models.Model):
             self.product.total_reviews = total
             self.product.save(update_fields=["average_rating", "total_reviews"])
 
+# Add after ProductReview model
+
+class OrderReview(models.Model):
+    """
+    Customer reviews for orders (shipping, delivery, overall experience)
+    """
+    RATING_CHOICES = [
+        (1, "1 Star - Very Poor"),
+        (2, "2 Stars - Poor"),
+        (3, "3 Stars - Average"),
+        (4, "4 Stars - Good"),
+        (5, "5 Stars - Excellent"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    order = models.ForeignKey(
+        'orders.Order', 
+        on_delete=models.CASCADE, 
+        related_name="reviews"
+    )
+    user = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name="order_reviews"
+    )
+
+    # Overall ratings
+    overall_rating = models.PositiveIntegerField(
+        _("overall rating"),
+        choices=RATING_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)]
+    )
+
+    # Specific aspects
+    shipping_rating = models.PositiveIntegerField(
+        _("shipping rating"),
+        choices=RATING_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        null=True,
+        blank=True
+    )
+    packaging_rating = models.PositiveIntegerField(
+        _("packaging rating"),
+        choices=RATING_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        null=True,
+        blank=True
+    )
+    delivery_speed_rating = models.PositiveIntegerField(
+        _("delivery speed rating"),
+        choices=RATING_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        null=True,
+        blank=True
+    )
+    customer_service_rating = models.PositiveIntegerField(
+        _("customer service rating"),
+        choices=RATING_CHOICES,
+        validators=[MinValueValidator(1), MaxValueValidator(5)],
+        null=True,
+        blank=True
+    )
+
+    # Review content
+    title = models.CharField(_("review title"), max_length=200, blank=True)
+    comment = models.TextField(_("comment"))
+    
+    # Images for order review
+    images = models.JSONField(
+        _("review images"),
+        default=list,
+        blank=True,
+        help_text=_("List of image URLs from the review")
+    )
+
+    # Moderation
+    is_approved = models.BooleanField(_("approved"), default=False)
+    is_edited = models.BooleanField(_("edited"), default=False)
+
+    # Helpful votes
+    helpful_yes = models.PositiveIntegerField(_("helpful yes votes"), default=0)
+    helpful_no = models.PositiveIntegerField(_("helpful no votes"), default=0)
+
+    # Admin response
+    admin_response = models.TextField(_("admin response"), blank=True)
+    admin_response_at = models.DateTimeField(_("admin response at"), null=True, blank=True)
+
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        db_table = "order_reviews"
+        verbose_name = _("order review")
+        verbose_name_plural = _("order reviews")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["order", "is_approved"]),
+            models.Index(fields=["user", "created_at"]),
+            models.Index(fields=["overall_rating"]),
+            models.Index(fields=["created_at"]),
+        ]
+        constraints = [
+            # Users can only review an order once
+            models.UniqueConstraint(
+                fields=["order", "user"], name="unique_order_review"
+            ),
+        ]
+
+    def __str__(self):
+        return f"Order {self.order.order_number} - {self.user.email}"
+
+    @property
+    def average_rating(self):
+        """Calculate average of all rating fields"""
+        ratings = [self.overall_rating]
+        if self.shipping_rating:
+            ratings.append(self.shipping_rating)
+        if self.packaging_rating:
+            ratings.append(self.packaging_rating)
+        if self.delivery_speed_rating:
+            ratings.append(self.delivery_speed_rating)
+        if self.customer_service_rating:
+            ratings.append(self.customer_service_rating)
+        return sum(ratings) / len(ratings)
+
+
+class ProductReviewHelpful(models.Model):
+    """
+    Track which users found a product review helpful
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    review = models.ForeignKey(
+        ProductReview, 
+        on_delete=models.CASCADE, 
+        related_name="helpful_votes"
+    )
+    user = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name="product_review_helpful_votes"
+    )
+    is_helpful = models.BooleanField(_("is helpful"), default=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        db_table = "product_review_helpful"
+        verbose_name = _("product review helpful vote")
+        verbose_name_plural = _("product review helpful votes")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["review", "user"], name="unique_product_review_helpful_vote"
+            ),
+        ]
+
+
+class OrderReviewHelpful(models.Model):
+    """
+    Track which users found an order review helpful
+    """
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    review = models.ForeignKey(
+        OrderReview, 
+        on_delete=models.CASCADE, 
+        related_name="helpful_votes"
+    )
+    user = models.ForeignKey(
+        User, 
+        on_delete=models.CASCADE, 
+        related_name="order_review_helpful_votes"
+    )
+    is_helpful = models.BooleanField(_("is helpful"), default=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+
+    class Meta:
+        db_table = "order_review_helpful"
+        verbose_name = _("order review helpful vote")
+        verbose_name_plural = _("order review helpful votes")
+        constraints = [
+            models.UniqueConstraint(
+                fields=["review", "user"], name="unique_order_review_helpful_vote"
+            ),
+        ]
+        
 
 class Wishlist(models.Model):
     """Customer wishlist"""

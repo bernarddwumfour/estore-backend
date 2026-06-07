@@ -198,4 +198,11 @@ urlpatterns = [
     path("/admin/pos/orders/create", views.pos_create_order, name="pos-create-order"),
     path("/admin/pos/customers/search", views.pos_search_customers, name="pos-search-customers"),
     path("/admin/pos/promotions", views.pos_get_active_promotions, name="pos-get-promotions"),
+    path("/admin/pos/customers/<uuid:customer_id>/addresses", views.pos_get_customer_addresses, name="pos-customer-addresses"),
+    path("/admin/pos/customers/<uuid:customer_id>/addresses/create", views.pos_create_customer_address, name="pos-create-customer-address"),
+    path("/admin/pos/customers/<uuid:customer_id>/addresses/<uuid:address_id>/update", views.pos_update_customer_address, name="pos-update-customer-address"),
+    path("/admin/pos/customers/<uuid:customer_id>/addresses/<uuid:address_id>/delete", views.pos_delete_customer_address, name="pos-delete-customer-address"),
+    
+    # POS Shipping Calculation
+    path("/admin/pos/shipping/calculate", views.pos_calculate_shipping_for_address, name="pos-calculate-shipping"),
 ]

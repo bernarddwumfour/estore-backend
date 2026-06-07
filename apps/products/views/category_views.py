@@ -776,7 +776,7 @@ def admin_category_bulk_action(request):
     
     try:
         from apps.products.schemas import validate_bulk_action, serialize_bulk_action_result
-        from apps.products.services.product_service import CategoryService
+        from apps.products.services.category_service import CategoryService
         
         # Validate request data
         cleaned, errors = validate_bulk_action(request.json_data)

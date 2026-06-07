@@ -126,6 +126,11 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
     if is_admin or detailed:
         data["shipping_address"] = serialize_address(order.shipping_address, is_admin)
         data["billing_address"] = serialize_address(order.billing_address, is_admin)
+        data["created_by"] = {
+    "id": str(order.created_by.id) if order.created_by else None,
+    "email": order.created_by.email if order.created_by else None,
+    "name": f"{order.created_by.first_name} {order.created_by.last_name}".strip() if order.created_by else None,
+} if is_admin else None
     else:
         if order.shipping_address:
             data["shipping_address"] = {

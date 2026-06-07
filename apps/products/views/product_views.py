@@ -5,8 +5,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django_ratelimit.decorators import ratelimit
 from estore.utils.responses import APIResponse
-from ..services.product_service import ProductService, ReviewService, AdminProductService
-from ..selectors import get_product_by_slug
+from ..services.product_service import ProductService,  AdminProductService
 from apps.users.decorators.auth import (
     json_request_required,
     jwt_required,
@@ -14,7 +13,6 @@ from apps.users.decorators.auth import (
 )
 from ..schemas import (
     validate_product_create, validate_product_update,
-    validate_review_create
 )
 from ..models import Product
 from apps.common.utils import sanitize_search_query
@@ -329,182 +327,6 @@ def product_detail(request, slug):
         _log_product_request(request, action, start_time, 500, extra={"slug": slug, "error": str(e)})
         return APIResponse.server_error()
 
-
-@csrf_exempt
-@require_http_methods(["POST"])
-@jwt_required
-@json_request_required
-@ratelimit(key='user', rate='10/h', method='POST', block=True)
-def create_review(request, slug):
-    """Create product review"""
-    start_time = time.time()
-    action = "create_review"
-    user = request.user
-    
-    log_action(
-        logger=logger,
-        severity=LogSeverity.DEBUG,
-        action=action,
-        description=f"Request started - creating review for product: {slug}",
-        status_code=0,
-        user=user,
-        request=request,
-        app_name=APP_NAME,
-        extra={"start_time": start_time, "slug": slug}
-    )
-    
-    try:
-        data = request.json_data
-        
-        # Validate input using schema
-        cleaned, errors = validate_review_create(data)
-        if errors:
-            _log_product_request(
-                request, action, start_time, 400,
-                extra={"slug": slug, "errors": errors}
-            )
-            return APIResponse.validation_error(errors)
-        
-        # Create review
-        review, error = ReviewService.create_review(
-            user=user,
-            product_slug=slug,
-            **cleaned
-        )
-        
-        if error:
-            if "already" in str(error).get("review", "").lower():
-                _log_product_request(
-                    request, action, start_time, 409,
-                    extra={"slug": slug, "reason": "Duplicate review"}
-                )
-                return APIResponse.conflict(error["review"])
-            
-            _log_product_request(
-                request, action, start_time, 400,
-                extra={"slug": slug, "error": error}
-            )
-            return APIResponse.validation_error(error)
-        
-        _log_product_request(
-            request, action, start_time, 201,
-            extra={
-                "review_id": str(review.id),
-                "product_slug": slug,
-                "rating": cleaned.get("rating"),
-                "has_title": bool(cleaned.get("title")),
-                "requested_by": get_user_info(user)
-            }
-        )
-        
-        return APIResponse.created(
-            data={"review_id": str(review.id)},
-            message="Review submitted successfully"
-        )
-        
-    except Exception as e:
-        logger.error(f"Create review error: {str(e)}", exc_info=True)
-        _log_product_request(request, action, start_time, 500, extra={"slug": slug, "error": str(e)})
-        return APIResponse.server_error()
-
-
-@csrf_exempt
-@require_http_methods(["GET"])
-@ratelimit(key='ip', rate='200/h', method='GET', block=True)
-def product_reviews(request, slug):
-    """Get product reviews"""
-    start_time = time.time()
-    action = "product_reviews"
-    user = request.user if hasattr(request, 'user') else None
-    
-    log_action(
-        logger=logger,
-        severity=LogSeverity.DEBUG,
-        action=action,
-        description=f"Request started - retrieving reviews for product: {slug}",
-        status_code=0,
-        user=user,
-        request=request,
-        app_name=APP_NAME,
-        extra={"start_time": start_time, "slug": slug}
-    )
-    
-    try:
-        page = int(request.GET.get("page", 1))
-        limit = int(request.GET.get("limit", 20))
-        rating = request.GET.get("rating")
-        verified = request.GET.get("verified")
-        
-        if rating:
-            rating = int(rating)
-            if rating < 1 or rating > 5:
-                _log_product_request(
-                    request, action, start_time, 400,
-                    extra={"slug": slug, "error": "Invalid rating", "rating": rating}
-                )
-                return APIResponse.bad_request("Rating must be between 1 and 5")
-        
-        if verified:
-            verified = verified.lower() == "true"
-        
-        if limit > 50:
-            limit = 50
-        if limit < 1:
-            limit = 20
-        
-        is_admin = _is_admin(request)
-        
-        reviews, total = ReviewService.get_product_reviews(
-            product_slug=slug,
-            page=page,
-            limit=limit,
-            rating=rating,
-            verified=verified,
-            is_admin=is_admin,
-        )
-        
-        # Get rating stats
-        product = get_product_by_slug(slug, include_inactive=is_admin)
-        stats = None
-        if product:
-            from ..selectors import get_product_rating_stats
-            stats = get_product_rating_stats(product.id)
-        
-        _log_product_request(
-            request, action, start_time, 200,
-            extra={
-                "product_slug": slug,
-                "total_reviews": total,
-                "reviews_returned": len(reviews),
-                "page": page,
-                "limit": limit,
-                "rating_filter": rating,
-                "verified_filter": verified,
-                "is_admin_access": is_admin,
-                "avg_rating": stats.get("average") if stats else None,
-                "requested_by": get_user_info(user)
-            }
-        )
-        
-        return APIResponse.success(
-            data={
-                "items": reviews,
-                "total": total,
-                "page": page,
-                "limit": limit,
-                "stats": stats
-            },
-            message=f"Reviews for {slug}"
-        )
-        
-    except ValueError as e:
-        logger.error(f"Product reviews error: {str(e)}")
-        _log_product_request(request, action, start_time, 400, extra={"slug": slug, "error": str(e)})
-        return APIResponse.bad_request("Invalid query parameter")
-    except Exception as e:
-        logger.error(f"Product reviews error: {str(e)}", exc_info=True)
-        _log_product_request(request, action, start_time, 500, extra={"slug": slug, "error": str(e)})
-        return APIResponse.server_error()
 
 
 # ==================== ADMIN VIEWS ====================

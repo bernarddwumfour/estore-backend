@@ -1,5 +1,5 @@
 """
-products/admin.py
+products/admin.py - Updated with OrderReview
 """
 
 from django.contrib import admin
@@ -10,6 +10,7 @@ from .models import (
     ProductVariant,
     VariantImage,
     ProductReview,
+    OrderReview,  # Add this
     Wishlist,
 )
 
@@ -93,6 +94,46 @@ class ProductReviewAdmin(admin.ModelAdmin):
     list_filter = ["rating", "is_approved", "is_verified_purchase"]
     search_fields = ["product__title", "user__email", "comment"]
     readonly_fields = ["created_at", "updated_at"]
+    actions = ["approve_reviews", "reject_reviews"]
+
+    def approve_reviews(self, request, queryset):
+        updated = queryset.update(is_approved=True)
+        for review in queryset:
+            review.update_product_rating()
+        self.message_user(request, f"{updated} reviews approved.")
+    approve_reviews.short_description = "Approve selected reviews"
+
+    def reject_reviews(self, request, queryset):
+        updated = queryset.update(is_approved=False)
+        for review in queryset:
+            review.update_product_rating()
+        self.message_user(request, f"{updated} reviews rejected.")
+    reject_reviews.short_description = "Reject selected reviews"
+
+
+@admin.register(OrderReview)
+class OrderReviewAdmin(admin.ModelAdmin):
+    list_display = [
+        "order",
+        "user",
+        "overall_rating",
+        "is_approved",
+        "created_at",
+    ]
+    list_filter = ["overall_rating", "is_approved"]
+    search_fields = ["order__order_number", "user__email", "comment"]
+    readonly_fields = ["created_at", "updated_at"]
+    actions = ["approve_reviews", "reject_reviews"]
+
+    def approve_reviews(self, request, queryset):
+        updated = queryset.update(is_approved=True)
+        self.message_user(request, f"{updated} order reviews approved.")
+    approve_reviews.short_description = "Approve selected order reviews"
+
+    def reject_reviews(self, request, queryset):
+        updated = queryset.update(is_approved=False)
+        self.message_user(request, f"{updated} order reviews rejected.")
+    reject_reviews.short_description = "Reject selected order reviews"
 
 
 @admin.register(Wishlist)

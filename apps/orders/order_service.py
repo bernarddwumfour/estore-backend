@@ -553,6 +553,363 @@ class OrderService:
         except Exception as e:
             logger.error(f"Payment verification error: {str(e)}")
             return False, {"error": str(e)}
+        
+    @staticmethod
+    @transaction.atomic
+    def create_pos_pickup_order(
+        customer: Optional[User],
+        items: List[Dict],
+        payment_method: str,
+        guest_info: Dict = None,
+        customer_note: str = "",
+        currency: str = "GHS",
+        created_by: User = None,
+    ) -> Tuple[Optional[Order], Optional[Dict]]:
+        """Create a POS order for in-store pickup (NO SHIPPING)"""
+        try:
+            from apps.promotions.models import Promotion
+            from apps.orders.store_address import get_or_create_store_address
+            
+            subtotal = Decimal('0.00')
+            order_items_data = []
+
+            # Process items (same as before)
+            for item_data in items:
+                if item_data.get('is_bundle'):
+                    bundle_id = item_data.get('bundle_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        promotion = Promotion.objects.get(id=bundle_id)
+                    except Promotion.DoesNotExist:
+                        return None, {"items": f"Promotion bundle not found: {bundle_id}"}
+                    
+                    if promotion.status != Promotion.STATUS_ACTIVE:
+                        return None, {"items": f"Promotion {promotion.name} is not active"}
+                    
+                    now = timezone.now()
+                    if promotion.starts_at > now:
+                        return None, {"items": f"Promotion {promotion.name} has not started yet"}
+                    if promotion.ends_at and promotion.ends_at < now:
+                        return None, {"items": f"Promotion {promotion.name} has expired"}
+                    
+                    for bundle_item in promotion.items.all():
+                        item_quantity = bundle_item.quantity * requested_quantity
+                        
+                        if bundle_item.variant.stock < item_quantity:
+                            return None, {"items": f"Insufficient stock for {bundle_item.variant.sku} in bundle {promotion.name}"}
+                        
+                        unit_price = Decimal('0.00') if bundle_item.is_free else bundle_item.original_price
+                        
+                        order_items_data.append({
+                            'variant': bundle_item.variant,
+                            'quantity': item_quantity,
+                            'unit_price': unit_price,
+                            'product_title': bundle_item.variant.product.title,
+                            'product_slug': bundle_item.variant.product.slug,
+                            'variant_attributes': bundle_item.variant.attributes,
+                            'sku': bundle_item.variant.sku,
+                            'is_bundle_item': True,
+                            'bundle_id': str(promotion.id),
+                            'bundle_name': promotion.name,
+                        })
+                        
+                        subtotal += unit_price * Decimal(str(item_quantity))
+                        
+                else:
+                    variant_id = item_data.get('variant_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        variant = ProductVariant.objects.select_related('product').get(
+                            id=variant_id, is_active=True
+                        )
+                    except ProductVariant.DoesNotExist:
+                        return None, {"items": f"Product variant not found: {variant_id}"}
+                    
+                    if not variant.is_active:
+                        return None, {"items": f"Variant {variant.sku} is no longer available"}
+                    
+                    if variant.product.status != Product.STATUS_PUBLISHED:
+                        return None, {"items": f"Product {variant.product.title} is not available"}
+                    
+                    if variant.stock < requested_quantity:
+                        return None, {"items": f"Insufficient stock for {variant.sku}. Available: {variant.stock}"}
+                    
+                    unit_price = variant.discounted_price
+                    
+                    order_items_data.append({
+                        'variant': variant,
+                        'quantity': requested_quantity,
+                        'unit_price': unit_price,
+                        'product_title': variant.product.title,
+                        'product_slug': variant.product.slug,
+                        'variant_attributes': variant.attributes,
+                        'sku': variant.sku,
+                        'is_bundle_item': False,
+                    })
+                    
+                    subtotal += unit_price * Decimal(str(requested_quantity))
+
+            # NO SHIPPING for pickup
+            shipping_cost = Decimal('0.00')
+            shipping_method = "In-Store Pickup"
+            tax_amount = Decimal('0.00')
+            discount_amount = Decimal('0.00')
+            total = subtotal + shipping_cost + tax_amount - discount_amount
+
+            # GET OR CREATE store pickup address (from settings)
+            store_address = get_or_create_store_address(created_by)
+
+            # Create order
+            order = Order.objects.create(
+                user=customer,
+                guest_email=guest_info.get('email', '') if guest_info else store_address.email,
+                guest_first_name=guest_info.get('first_name', '') if guest_info else store_address.first_name,
+                guest_last_name=guest_info.get('last_name', '') if guest_info else store_address.last_name,
+                guest_phone=guest_info.get('phone', '') if guest_info else store_address.phone,
+                shipping_address=store_address,
+                billing_address=store_address,
+                payment_method=payment_method,
+                shipping_method=shipping_method,
+                shipping_cost=shipping_cost,
+                tax_rate=Decimal('0.00'),
+                tax_amount=tax_amount,
+                discount_amount=discount_amount,
+                subtotal=subtotal,
+                total=total,
+                customer_note=customer_note,
+                currency=currency,
+                created_by=created_by,
+            )
+
+            # Create order items and reduce stock
+            for item_data in order_items_data:
+                OrderItem.objects.create(
+                    order=order,
+                    variant=item_data['variant'],
+                    product_title=item_data['product_title'],
+                    product_slug=item_data['product_slug'],
+                    variant_attributes=item_data['variant_attributes'],
+                    sku=item_data['sku'],
+                    unit_price=item_data['unit_price'],
+                    quantity=item_data['quantity'],
+                    is_bundle_item=item_data.get('is_bundle_item', False),
+                    bundle_id=item_data.get('bundle_id', ''),
+                    bundle_name=item_data.get('bundle_name', ''),
+                )
+                item_data['variant'].reduce_stock(item_data['quantity'])
+
+            # Handle payment status based on method
+            if payment_method == 'pos':
+                order.payment_status = Order.PAYMENT_PAID
+                order.status = Order.STATUS_CONFIRMED
+                order.confirmed_at = timezone.now()
+                order.paid_at = timezone.now()
+                order.payment_type = 'pos'
+            elif payment_method == 'cash_on_delivery' or payment_method == 'pod':
+                order.payment_status = Order.PAYMENT_PENDING
+                order.status = Order.STATUS_CONFIRMED
+                order.confirmed_at = timezone.now()
+                order.payment_type = Order.PAYMENT_TYPE_POD
+                order.pod_eligible = True
+            else:  # paystack
+                order.payment_status = Order.PAYMENT_PENDING
+                order.status = Order.STATUS_PENDING
+                order.payment_type = Order.PAYMENT_TYPE_ONLINE
+            
+            order.save()
+
+            logger.info(f"POS pickup order created by {created_by.email if created_by else 'unknown'}: {order.order_number} with total=${total}")
+            return order, None
+
+        except Exception as e:
+            logger.error(f"POS pickup order creation error: {str(e)}", exc_info=True)
+            return None, {"general": f"Failed to create POS order: {str(e)}"}
+
+    @staticmethod
+    @transaction.atomic
+    def create_pos_shipping_order(
+        customer: Optional[User],
+        items: List[Dict],
+        shipping_address_data: Dict,
+        payment_method: str,
+        guest_info: Dict = None,
+        customer_note: str = "",
+        currency: str = "GHS",
+        created_by: User = None,  # Staff/admin creating the order
+    ) -> Tuple[Optional[Order], Optional[Dict]]:
+        """Create a POS order with shipping (customer wants items shipped)"""
+        try:
+            from apps.orders.shipping_calculator import ShippingCalculator
+            from apps.promotions.models import Promotion
+            
+            subtotal = Decimal('0.00')
+            order_items_data = []
+            variants_for_weight = []
+
+            for item_data in items:
+                if item_data.get('is_bundle'):
+                    bundle_id = item_data.get('bundle_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        promotion = Promotion.objects.get(id=bundle_id)
+                    except Promotion.DoesNotExist:
+                        return None, {"items": f"Promotion bundle not found: {bundle_id}"}
+                    
+                    if promotion.status != Promotion.STATUS_ACTIVE:
+                        return None, {"items": f"Promotion {promotion.name} is not active"}
+                    
+                    now = timezone.now()
+                    if promotion.starts_at > now:
+                        return None, {"items": f"Promotion {promotion.name} has not started yet"}
+                    if promotion.ends_at and promotion.ends_at < now:
+                        return None, {"items": f"Promotion {promotion.name} has expired"}
+                    
+                    for bundle_item in promotion.items.all():
+                        item_quantity = bundle_item.quantity * requested_quantity
+                        
+                        if bundle_item.variant.stock < item_quantity:
+                            return None, {"items": f"Insufficient stock for {bundle_item.variant.sku} in bundle {promotion.name}"}
+                        
+                        unit_price = Decimal('0.00') if bundle_item.is_free else bundle_item.original_price
+                        
+                        order_items_data.append({
+                            'variant': bundle_item.variant,
+                            'quantity': item_quantity,
+                            'unit_price': unit_price,
+                            'product_title': bundle_item.variant.product.title,
+                            'product_slug': bundle_item.variant.product.slug,
+                            'variant_attributes': bundle_item.variant.attributes,
+                            'sku': bundle_item.variant.sku,
+                            'is_bundle_item': True,
+                            'bundle_id': str(promotion.id),
+                            'bundle_name': promotion.name,
+                        })
+                        
+                        subtotal += unit_price * Decimal(str(item_quantity))
+                        variants_for_weight.append({'variant': bundle_item.variant, 'quantity': item_quantity})
+                        
+                else:
+                    variant_id = item_data.get('variant_id')
+                    requested_quantity = item_data.get('quantity', 1)
+                    
+                    try:
+                        variant = ProductVariant.objects.select_related('product').get(
+                            id=variant_id, is_active=True
+                        )
+                    except ProductVariant.DoesNotExist:
+                        return None, {"items": f"Product variant not found: {variant_id}"}
+                    
+                    if not variant.is_active:
+                        return None, {"items": f"Variant {variant.sku} is no longer available"}
+                    
+                    if variant.product.status != Product.STATUS_PUBLISHED:
+                        return None, {"items": f"Product {variant.product.title} is not available"}
+                    
+                    if variant.stock < requested_quantity:
+                        return None, {"items": f"Insufficient stock for {variant.sku}. Available: {variant.stock}"}
+                    
+                    unit_price = variant.discounted_price
+                    
+                    order_items_data.append({
+                        'variant': variant,
+                        'quantity': requested_quantity,
+                        'unit_price': unit_price,
+                        'product_title': variant.product.title,
+                        'product_slug': variant.product.slug,
+                        'variant_attributes': variant.attributes,
+                        'sku': variant.sku,
+                        'is_bundle_item': False,
+                    })
+                    
+                    subtotal += unit_price * Decimal(str(requested_quantity))
+                    variants_for_weight.append({'variant': variant, 'quantity': requested_quantity})
+
+            # Create shipping address
+            shipping_address = OrderService._create_or_get_address(shipping_address_data, customer, 'shipping')
+            
+            # Calculate shipping cost
+            total_weight = ShippingCalculator.calculate_order_weight(variants_for_weight)
+            shipping_calculation = ShippingCalculator.calculate_shipping_cost(
+                country_code=shipping_address.country,
+                total_weight_kg=total_weight,
+                subtotal=subtotal,
+            )
+            
+            shipping_cost = shipping_calculation['cost']
+            shipping_method = shipping_calculation['method_name']
+            
+            tax_amount = Decimal('0.00')
+            discount_amount = Decimal('0.00')
+            total = subtotal + shipping_cost + tax_amount - discount_amount
+
+            # Create order
+            order = Order.objects.create(
+                user=customer,
+                guest_email=guest_info.get('email', '') if guest_info else shipping_address.email,
+                guest_first_name=guest_info.get('first_name', '') if guest_info else shipping_address.first_name,
+                guest_last_name=guest_info.get('last_name', '') if guest_info else shipping_address.last_name,
+                guest_phone=guest_info.get('phone', '') if guest_info else shipping_address.phone,
+                shipping_address=shipping_address,
+                billing_address=shipping_address,
+                payment_method=payment_method,
+                shipping_method=shipping_method,
+                shipping_cost=shipping_cost,
+                tax_rate=Decimal('0.00'),
+                tax_amount=tax_amount,
+                discount_amount=discount_amount,
+                subtotal=subtotal,
+                total=total,
+                customer_note=customer_note,
+                currency=currency,
+                created_by=created_by,  # Track who created this order
+            )
+
+            # Create order items and reduce stock
+            for item_data in order_items_data:
+                OrderItem.objects.create(
+                    order=order,
+                    variant=item_data['variant'],
+                    product_title=item_data['product_title'],
+                    product_slug=item_data['product_slug'],
+                    variant_attributes=item_data['variant_attributes'],
+                    sku=item_data['sku'],
+                    unit_price=item_data['unit_price'],
+                    quantity=item_data['quantity'],
+                    is_bundle_item=item_data.get('is_bundle_item', False),
+                    bundle_id=item_data.get('bundle_id', ''),
+                    bundle_name=item_data.get('bundle_name', ''),
+                )
+                item_data['variant'].reduce_stock(item_data['quantity'])
+
+            # Handle payment status based on method
+            if payment_method == 'pos':
+                order.payment_status = Order.PAYMENT_PAID
+                order.status = Order.STATUS_CONFIRMED
+                order.confirmed_at = timezone.now()
+                order.paid_at = timezone.now()
+                order.payment_type = 'pos'
+            elif payment_method == 'cash_on_delivery' or payment_method == 'pod':
+                order.payment_status = Order.PAYMENT_PENDING
+                order.status = Order.STATUS_CONFIRMED
+                order.confirmed_at = timezone.now()
+                order.payment_type = Order.PAYMENT_TYPE_POD
+                order.pod_eligible = True
+            else:  # paystack
+                order.payment_status = Order.PAYMENT_PENDING
+                order.status = Order.STATUS_PENDING
+                order.payment_type = Order.PAYMENT_TYPE_ONLINE
+            
+            order.save()
+
+            logger.info(f"POS shipping order created by {created_by.email if created_by else 'unknown'}: {order.order_number} with subtotal=${subtotal}, shipping=${shipping_cost}, total=${total}")
+            return order, None
+
+        except Exception as e:
+            logger.error(f"POS shipping order creation error: {str(e)}", exc_info=True)
+            return None, {"general": f"Failed to create POS order: {str(e)}"}
 
 
 class AddressService:

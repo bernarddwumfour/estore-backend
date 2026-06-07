@@ -1,5 +1,5 @@
 """
-products/urls.py - Updated with admin endpoints (no trailing slashes)
+products/urls.py - Updated with review endpoints (product and order reviews)
 """
 
 from django.urls import path
@@ -16,20 +16,17 @@ from apps.products.views.analytics_views import (
     product_funnel_analytics,
     inventory_health_analytics,
     pricing_analytics
-    # product_analytics
 )
 
 from apps.products.views.product_views import (
     product_detail,
     product_list,
-    create_review,
     admin_product_bulk_action,
     admin_product_create,
     admin_product_detail,
     admin_product_list,
     admin_product_update,
     product_search,
-    product_reviews,
 )
 from apps.products.views.category_views import (
     category_list,
@@ -53,12 +50,30 @@ from apps.products.views.variant_views import (
     wishlist_remove,
     variant_detail,
 )
-from . import views
+
+# Import new review views
+from apps.products.views.review_views import (
+    # Public endpoints
+    product_reviews_list,
+    product_review_create,
+    product_review_helpful,
+    order_review_create,
+    order_review_detail,
+    order_review_helpful,
+    user_reviews,
+    # Admin endpoints
+    admin_reviews_list,
+    admin_review_approve,
+    admin_review_reject,
+    admin_reviews_bulk_action,
+    admin_order_review_response,
+)
 
 app_name = "products"
 
 urlpatterns = [
-   path(
+    # ==================== ANALYTICS ENDPOINTS ====================
+    path(
         "/admin/products/analytics/overview",
         product_analytics_overview,
         name="product-analytics-overview",
@@ -118,19 +133,90 @@ urlpatterns = [
         review_analytics,
         name="product-analytics-reviews",
     ),
+    
+    # ==================== PUBLIC PRODUCT REVIEW ENDPOINTS ====================
+    
+    path(
+        "/<slug:slug>/reviews/create",
+        product_review_create,
+        name="product-review-create",
+    ),
+    path(
+        "/reviews/product/<uuid:review_id>/helpful",
+        product_review_helpful,
+        name="product-review-helpful",
+    ),
+    
+    # ==================== PUBLIC ORDER REVIEW ENDPOINTS ====================
+    path(
+        "/orders/<uuid:order_id>/reviews/create",
+        order_review_create,
+        name="order-review-create",
+    ),
+    path(
+        "/orders/reviews/<uuid:review_id>",
+        order_review_detail,
+        name="order-review-detail",
+    ),
+    path(
+        "/orders/reviews/<uuid:review_id>/helpful",
+        order_review_helpful,
+        name="order-review-helpful",
+    ),
+    
+    # ==================== USER REVIEWS ENDPOINT ====================
+    path(
+        "/user/reviews",
+        user_reviews,
+        name="user-reviews",
+    ),
+    
     # ==================== PUBLIC ENDPOINTS ====================
     path("", product_list, name="product-list"),
     path("/variants/<uuid:variant_id>", variant_detail, name="variant-detail"),
     path("/categories", category_list, name="category-list"),
     path("/search", product_search, name="product-search"),
     path("/categories/<slug:slug>", category_detail, name="category-detail"),
+    
     # ==================== AUTHENTICATED USER ENDPOINTS ====================
     path("/wishlist", wishlist_list, name="wishlist-list"),
     path("/wishlist/<uuid:variant_id>", wishlist_remove, name="wishlist-remove"),
-    path("/<slug:slug>/reviews/create", create_review, name="create-review"),
     path("/<slug:slug>", product_detail, name="product-detail"),
-    path("/<slug:slug>/reviews", product_reviews, name="product-reviews"),
-    # ==================== ADMIN ENDPOINTS ====================
+    
+    # ==================== ADMIN REVIEW ENDPOINTS ====================
+   path(
+    "/admin/reviews",
+    admin_reviews_list,
+    name="admin-reviews-list",
+),
+    path(
+        "/admin/reviews/<uuid:review_id>/approve",
+        admin_review_approve,
+        name="admin-review-approve",
+    ),
+    path(
+        "/admin/reviews/<uuid:review_id>/reject",
+        admin_review_reject,
+        name="admin-review-reject",
+    ),
+    path(
+        "/admin/reviews/bulk-action",
+        admin_reviews_bulk_action,
+        name="admin-reviews-bulk-action",
+    ),
+    path(
+        "/admin/reviews/order/<uuid:review_id>/response",
+        admin_order_review_response,
+        name="admin-order-review-response",
+    ),
+    
+    path(
+        "/<slug:slug>/reviews",
+        product_reviews_list,
+        name="product-reviews-list",
+    ),
+    
+    # ==================== ADMIN PRODUCT ENDPOINTS ====================
     path("/admin/products", admin_product_list, name="admin-product-list"),
     path(
         "/admin/products/create",
@@ -152,6 +238,8 @@ urlpatterns = [
         admin_product_bulk_action,
         name="admin-product-bulk-action",
     ),
+    
+    # ==================== ADMIN VARIANT ENDPOINTS ====================
     path("/admin/variants", admin_variant_list, name="admin-variant-list"),
     path(
         "/admin/products/<uuid:product_id>/variants",
@@ -183,6 +271,8 @@ urlpatterns = [
         admin_variant_bulk_action,
         name="admin-variant-bulk-action",
     ),
+    
+    # ==================== ADMIN CATEGORY ENDPOINTS ====================
     path("/admin/categories", admin_category_list, name="admin-category-list"),
     path(
         "/admin/categories/create",
@@ -204,11 +294,6 @@ urlpatterns = [
         admin_category_delete,
         name="admin-category-delete",
     ),
-    # path(
-    #     "/admin/analytics",
-    #     product_analytics,
-    #     name="admin-product-analytics",
-    # ),
     path(
         "/admin/categories/bulk-action",
         admin_category_bulk_action,

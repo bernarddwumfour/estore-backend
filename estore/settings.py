@@ -51,6 +51,21 @@ DEFAULT_SHIPPING_ORIGIN = {
     "address": "Your Warehouse Address, Accra, Ghana",
 }
 
+# Store Address Configuration (for POS in-store pickup)
+STORE_ADDRESS = {
+    'first_name': os.environ.get('STORE_ADDRESS_FIRST_NAME', 'Store'),
+    'last_name': os.environ.get('STORE_ADDRESS_LAST_NAME', 'Pickup'),
+    'email': os.environ.get('STORE_ADDRESS_EMAIL', 'store@example.com'),
+    'phone': os.environ.get('STORE_ADDRESS_PHONE', '+233000000000'),
+    'address_line1': os.environ.get('STORE_ADDRESS_LINE1', '123 Main Street'),
+    'address_line2': os.environ.get('STORE_ADDRESS_LINE2', ''),
+    'city': os.environ.get('STORE_ADDRESS_CITY', 'Accra'),
+    'state': os.environ.get('STORE_ADDRESS_STATE', 'Greater Accra'),
+    'postal_code': os.environ.get('STORE_ADDRESS_POSTAL_CODE', 'GA-123'),
+    'country': os.environ.get('STORE_ADDRESS_COUNTRY', 'GH'),
+    'instructions': os.environ.get('STORE_ADDRESS_INSTRUCTIONS', 'In-Store Pickup'),
+}
+
 CACHES = {
     'default': {
         'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',

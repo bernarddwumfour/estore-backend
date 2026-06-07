@@ -203,10 +203,12 @@ class Order(models.Model):
     # Payment method type (for tracking)
     PAYMENT_TYPE_ONLINE = 'online'
     PAYMENT_TYPE_POD = 'pod'
+    PAYMENT_TYPE_POS = 'pos'
     
     PAYMENT_TYPE_CHOICES = [
-        (PAYMENT_TYPE_ONLINE, 'Online Payment'),
-        (PAYMENT_TYPE_POD, 'Pay on Delivery'),
+    (PAYMENT_TYPE_ONLINE, 'Online Payment'),
+    (PAYMENT_TYPE_POD, 'Pay on Delivery'),
+    (PAYMENT_TYPE_POS, 'Point of Sale (In-Store)'),
     ]
     
     payment_type = models.CharField(
@@ -214,6 +216,15 @@ class Order(models.Model):
         max_length=20,
         choices=PAYMENT_TYPE_CHOICES,
         default=PAYMENT_TYPE_ONLINE,
+    )
+    
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_orders",
+        verbose_name=_("created by")
     )
 
 

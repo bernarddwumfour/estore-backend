@@ -71,11 +71,12 @@ def create_order(request):
     """Create a new order - supports both authenticated users and guest checkout"""
     try:
         data = request.json_data
-        user = get_user_or_none(request)
+        user = request.user
         is_authenticated = user is not None and user.is_authenticated
+        # print("Hereee",user,data)
 
         # Validate input
-        cleaned, errors = validate_order_create(data, is_authenticated)
+        cleaned, errors = validate_order_create(data, user)
         if errors:
             return APIResponse.validation_error(errors)
 
