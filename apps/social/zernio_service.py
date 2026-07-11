@@ -111,7 +111,9 @@ class ZernioService:
             if cached is not None:
                 return cached, None
 
-        data, error = cls._request("GET", "/accounts/list-accounts")
+        # Verified against the live API (quickstart): GET /accounts.
+        # ("list-accounts" in their docs is the SDK method name, not the path.)
+        data, error = cls._request("GET", "/accounts")
         if error:
             return None, error
 
@@ -177,8 +179,9 @@ class ZernioService:
         if sandbox:
             return sandbox.get_post_analytics(post_id)
 
+        # Verified live: analytics live under GET /analytics (no /posts suffix)
         data, error = cls._request(
-            "GET", "/analytics/posts", params={"postId": post_id}
+            "GET", "/analytics", params={"postId": post_id}
         )
         if error:
             return None, error
@@ -399,9 +402,12 @@ class ZernioService:
 
     @classmethod
     def get_usage_stats(cls) -> Tuple[Optional[Dict], Optional[str]]:
-        """Plan consumption metrics (cached 5 minutes).
+        """Usage metrics (cached 5 minutes).
 
-        Field names unverified against the live API — parsed defensively.
+        Zernio exposes no usage/quota endpoint (verified against the live
+        API), so this synthesizes stats from real sources: connected
+        accounts and profiles from the API, posts-this-month from our own
+        sent SocialPost records. Plan/limits are unknown → empty/0.
         """
         sandbox = cls._sandbox()
         if sandbox:
@@ -412,17 +418,28 @@ class ZernioService:
         if cached is not None:
             return cached, None
 
-        data, error = cls._request("GET", "/usage/stats")
+        accounts, error = cls.list_accounts()
         if error:
             return None, error
-        raw = cls._extract_dict(data, keys=("usage", "stats", "data"))
+        profiles, _profiles_error = cls.list_profiles()
+
+        from django.utils import timezone
+        from apps.social.models import SocialPost
+
+        month_start = timezone.now().replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        posts_this_month = SocialPost.objects.filter(
+            status=SocialPost.STATUS_SENT, sent_at__gte=month_start
+        ).count()
+
         stats = {
-            "plan": raw.get("plan", ""),
-            "accounts_connected": raw.get("accountsConnected", raw.get("accounts", 0)),
-            "accounts_limit": raw.get("accountsLimit", raw.get("accountLimit", 0)),
-            "posts_this_month": raw.get("postsThisMonth", raw.get("posts", 0)),
-            "posts_limit": raw.get("postsLimit", 0),
-            "profiles": raw.get("profiles", 0),
+            "plan": "",
+            "accounts_connected": len(accounts or []),
+            "accounts_limit": 0,
+            "posts_this_month": posts_this_month,
+            "posts_limit": 0,
+            "profiles": len(profiles or []),
         }
         cache.set(cache_key, stats, 300)
         return stats, None
