@@ -11,6 +11,8 @@ staticfiles/
 # Environment
 .env
 .env.local
+venv/
+*.sqlite3
 
 # IDE
 .vscode/
