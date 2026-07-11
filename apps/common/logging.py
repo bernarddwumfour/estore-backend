@@ -32,12 +32,22 @@ def get_user_info(user: Any) -> str:
     return "unknown"
 
 
+def get_client_ip(request: HttpRequest) -> Optional[str]:
+    """Client IP for logging. Behind proxies (Render/Cloudflare) the
+    X-Forwarded-For header is a comma-separated chain — the first entry is
+    the client. The DB column is a single inet, so never store the chain."""
+    forwarded = request.META.get('HTTP_X_FORWARDED_FOR', '')
+    if forwarded:
+        return forwarded.split(',')[0].strip() or None
+    return request.META.get('REMOTE_ADDR') or None
+
+
 def get_request_info(request: HttpRequest) -> Dict[str, Any]:
     """Extract relevant info from request for logging"""
     info = {
         "method": request.method,
         "path": request.path,
-        "ip": request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', 'unknown')),
+        "ip": get_client_ip(request) or 'unknown',
     }
     
     user_agent = request.META.get('HTTP_USER_AGENT', '')
@@ -102,8 +112,7 @@ def log_action(
     
     # Add request IP if available
     if request:
-        ip = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', 'unknown'))
-        log_parts.append(f"ip={ip}")
+        log_parts.append(f"ip={get_client_ip(request) or 'unknown'}")
     
     log_parts.append(f"desc={description}")
     
@@ -171,7 +180,7 @@ def _save_log_to_db_async(app_name, action, severity, description, status_code, 
         path = None
         method = None
         if request:
-            ip_address = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', None))
+            ip_address = get_client_ip(request)
             path = request.path
             method = request.method
 

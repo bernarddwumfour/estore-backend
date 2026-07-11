@@ -135,3 +135,21 @@ class EmailTemplateRenderTests(SimpleTestCase):
             "emails/order_delivered.html", {**base, "order": FakeOrder()}
         )
         self.assertIn("ORD123", html)
+
+
+class ClientIpTests(SimpleTestCase):
+    def test_forwarded_chain_returns_first_ip(self):
+        from django.test import RequestFactory
+        from apps.common.logging import get_client_ip
+
+        request = RequestFactory().get(
+            "/", HTTP_X_FORWARDED_FOR="18.207.165.154, 172.68.245.48, 10.29.200.106"
+        )
+        self.assertEqual(get_client_ip(request), "18.207.165.154")
+
+    def test_falls_back_to_remote_addr(self):
+        from django.test import RequestFactory
+        from apps.common.logging import get_client_ip
+
+        request = RequestFactory().get("/")
+        self.assertEqual(get_client_ip(request), "127.0.0.1")
