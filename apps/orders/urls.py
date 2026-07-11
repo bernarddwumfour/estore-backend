@@ -119,6 +119,11 @@ urlpatterns = [
         views.admin_update_payment_status,
         name="update-payment-status",
     ),
+    path(
+        "/admin/orders/<str:order_id>/verify-payment",
+        views.admin_verify_order_payment,
+        name="admin-verify-order-payment",
+    ),
     path("/admin/orders/stats", views.admin_order_stats, name="order-stats"),
     path(
         "/admin/orders/analytics",
@@ -185,12 +190,13 @@ urlpatterns = [
         name="order-transactions",
     ),
     path("/<str:order_id>/debug", views.order_debug_info, name="order-debug"),
-    # ==================== SHIPPING CALCULATION ENDPOINTS ====================
+    # ==================== SHIPPING ENDPOINTS ====================
     path("/shipping/rates", views.get_shipping_rates, name="shipping-rates"),
     path("/shipping/options", views.get_shipping_options, name="shipping-options"),
-    # ==================== SHIPPING CALCULATION ENDPOINTS ====================
-    path("/shipping/rates", views.get_shipping_rates, name="shipping-rates"),
-    path("/shipping/options", views.get_shipping_options, name="shipping-options"),
+    path("/shipping/meta", views.get_shipping_meta, name="shipping-meta"),
+    path("/checkout/meta", views.checkout_meta, name="checkout-meta"),
+    path("/shipping/popular-addresses", views.get_popular_addresses, name="shipping-popular-addresses"),
+    path("/admin/shipping/config", views.admin_shipping_config, name="admin-shipping-config"),
     path("/<str:order_id>", views.order_detail, name="order-detail"),
     
     

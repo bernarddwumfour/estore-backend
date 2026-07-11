@@ -18,8 +18,10 @@ class Order(models.Model):
     STATUS_PENDING = "pending"
     STATUS_CONFIRMED = "confirmed"
     STATUS_PROCESSING = "processing"
+    STATUS_READY_FOR_SHIPPING = "ready_for_shipping"
     STATUS_SHIPPED = "shipped"
     STATUS_DELIVERED = "delivered"
+    STATUS_COMPLETED = "completed"
     STATUS_CANCELLED = "cancelled"
     STATUS_REFUNDED = "refunded"
 
@@ -27,22 +29,45 @@ class Order(models.Model):
         (STATUS_PENDING, "Pending"),
         (STATUS_CONFIRMED, "Confirmed"),
         (STATUS_PROCESSING, "Processing"),
+        (STATUS_READY_FOR_SHIPPING, "Ready for Shipping"),
         (STATUS_SHIPPED, "Shipped"),
         (STATUS_DELIVERED, "Delivered"),
+        (STATUS_COMPLETED, "Completed"),
         (STATUS_CANCELLED, "Cancelled"),
         (STATUS_REFUNDED, "Refunded"),
+    ]
+
+    # Forward fulfilment pipelines. Shipping orders travel the full rail;
+    # pickup (POS in-store) orders are never shipped so they complete after
+    # processing. cancelled/refunded are exits, not pipeline steps.
+    SHIPPING_PIPELINE = [
+        STATUS_PENDING,
+        STATUS_CONFIRMED,
+        STATUS_PROCESSING,
+        STATUS_READY_FOR_SHIPPING,
+        STATUS_SHIPPED,
+        STATUS_DELIVERED,
+        STATUS_COMPLETED,
+    ]
+    PICKUP_PIPELINE = [
+        STATUS_PENDING,
+        STATUS_CONFIRMED,
+        STATUS_PROCESSING,
+        STATUS_COMPLETED,
     ]
 
     # Payment statuses
     PAYMENT_PENDING = "pending"
     PAYMENT_PAID = "paid"
     PAYMENT_FAILED = "failed"
+    PAYMENT_PARTIALLY_REFUNDED = "partially_refunded"
     PAYMENT_REFUNDED = "refunded"
 
     PAYMENT_STATUS_CHOICES = [
         (PAYMENT_PENDING, "Pending"),
         (PAYMENT_PAID, "Paid"),
         (PAYMENT_FAILED, "Failed"),
+        (PAYMENT_PARTIALLY_REFUNDED, "Partially Refunded"),
         (PAYMENT_REFUNDED, "Refunded"),
     ]
 
@@ -160,6 +185,44 @@ class Order(models.Model):
         validators=[MinValueValidator(0)],
     )
 
+    discount_code = models.ForeignKey(
+        "promotions.DiscountCode",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="orders",
+        verbose_name=_("discount code"),
+    )
+
+    discount_code_text = models.CharField(
+        _("discount code text"),
+        max_length=50,
+        blank=True,
+    )
+
+    entered_discount_code_text = models.CharField(
+        _("entered discount code text"),
+        max_length=50,
+        blank=True,
+    )
+
+    affiliate = models.ForeignKey(
+        "users.Affiliate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="attributed_orders",
+        verbose_name=_("affiliate"),
+    )
+
+    affiliate_commission_amount = models.DecimalField(
+        _("affiliate commission amount"),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)],
+    )
+
     total = models.DecimalField(
         _("total"),
         max_digits=10,
@@ -168,7 +231,7 @@ class Order(models.Model):
         validators=[MinValueValidator(0)],
     )
 
-    currency = models.CharField(_("currency"), max_length=3, default="USD")
+    currency = models.CharField(_("currency"), max_length=3, default="GHS")
 
     shipping_method = models.CharField(_("shipping method"), max_length=100, blank=True)
 
@@ -193,9 +256,16 @@ class Order(models.Model):
     updated_at = models.DateTimeField(_("updated at"), auto_now=True)
     paid_at = models.DateTimeField(_("paid at"), null=True, blank=True)
     confirmed_at = models.DateTimeField(_("confirmed at"), null=True, blank=True)
+    processing_at = models.DateTimeField(_("processing at"), null=True, blank=True)
+    ready_for_shipping_at = models.DateTimeField(
+        _("ready for shipping at"), null=True, blank=True
+    )
     shipped_at = models.DateTimeField(_("shipped at"), null=True, blank=True)
     delivered_at = models.DateTimeField(_("delivered at"), null=True, blank=True)
+    completed_at = models.DateTimeField(_("completed at"), null=True, blank=True)
     cancelled_at = models.DateTimeField(_("cancelled at"), null=True, blank=True)
+
+    is_pickup = models.BooleanField(_("in-store pickup"), default=False)
     
     pod_eligible = models.BooleanField(_("pay on delivery eligible"), default=False)
     pod_reason = models.CharField(_("POD ineligible reason"), max_length=255, blank=True)
@@ -239,6 +309,9 @@ class Order(models.Model):
             models.Index(fields=["payment_status"]),
             models.Index(fields=["user", "created_at"]),
             models.Index(fields=["guest_email"]),
+            models.Index(fields=["discount_code_text"]),
+            models.Index(fields=["entered_discount_code_text"]),
+            models.Index(fields=["affiliate"]),
         ]
         
     @property
@@ -264,9 +337,15 @@ class Order(models.Model):
         import random
 
         if not self.order_number:
+            prefix = "ORD"
+            try:
+                from apps.common.models import GeneralConfig
+                prefix = GeneralConfig.get_cached().order_number_prefix or "ORD"
+            except Exception:
+                pass  # config must never block an order save
             date_str = timezone.now().strftime("%Y%m%d")
             random_str = str(random.randint(1000, 9999))
-            self.order_number = f"ORD{date_str}{random_str}"
+            self.order_number = f"{prefix}{date_str}{random_str}"
 
         self.total = (
             self.subtotal + self.shipping_cost + self.tax_amount - self.discount_amount
@@ -414,19 +493,21 @@ class Shipment(models.Model):
     order = models.OneToOneField(Order, on_delete=models.CASCADE, related_name="shipment")
     
     # Shipping statuses only
+    STATUS_PENDING = "pending"
     STATUS_SHIPPED = "shipped"
     STATUS_DELIVERED = "delivered"
     STATUS_CANCELLED = "cancelled"
     STATUS_REFUNDED = "refunded"
-    
+
     STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
         (STATUS_SHIPPED, "Shipped"),
         (STATUS_DELIVERED, "Delivered"),
         (STATUS_CANCELLED, "Cancelled"),
         (STATUS_REFUNDED, "Refunded"),
     ]
     
-    status = models.CharField(_("status"), max_length=20, choices=STATUS_CHOICES, default=STATUS_SHIPPED, db_index=True)
+    status = models.CharField(_("status"), max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
     
     # Tracking information
     tracking_number = models.CharField(_("tracking number"), max_length=100, blank=True,null=True)
@@ -437,7 +518,7 @@ class Shipment(models.Model):
     weight = models.DecimalField(_("weight (kg)"), max_digits=8, decimal_places=2, null=True, blank=True)
     
     # Dates
-    shipped_at = models.DateTimeField(_("shipped at"), auto_now_add=True)
+    shipped_at = models.DateTimeField(_("shipped at"), null=True, blank=True)
     delivered_at = models.DateTimeField(_("delivered at"), null=True, blank=True)
     estimated_delivery = models.DateTimeField(_("estimated delivery"), null=True, blank=True)
     
@@ -467,31 +548,58 @@ class Shipment(models.Model):
     
     def save(self, *args, **kwargs):
         """Update order status when shipment is created/updated"""
-        is_new = self.pk is None
-        
-        # Set shipped_at for new shipments
-        if is_new and not self.shipped_at:
+        sync_commission_reason = None
+        customer_notification = None
+
+        if self.status == self.STATUS_SHIPPED and not self.shipped_at:
             self.shipped_at = timezone.now()
-        
-        # Update order status
+
+        # Update order status. Pending shipments don't touch the order — they
+        # only exist so the shipment can be tracked before dispatch.
         if self.status == self.STATUS_SHIPPED and self.order.status != Order.STATUS_SHIPPED:
             self.order.status = Order.STATUS_SHIPPED
             self.order.shipped_at = self.shipped_at
             self.order.save()
-        elif self.status == self.STATUS_DELIVERED and self.order.status != Order.STATUS_DELIVERED:
+            customer_notification = "shipped"
+        elif self.status == self.STATUS_DELIVERED and self.order.status not in (
+            Order.STATUS_DELIVERED,
+            Order.STATUS_COMPLETED,  # never demote an already-completed order
+        ):
             self.order.status = Order.STATUS_DELIVERED
             self.order.delivered_at = self.delivered_at or timezone.now()
             self.order.save()
+            sync_commission_reason = "Shipment marked delivered"
+            customer_notification = "delivered"
         elif self.status == self.STATUS_CANCELLED and self.order.status != Order.STATUS_CANCELLED:
             self.order.status = Order.STATUS_CANCELLED
             self.order.cancelled_at = timezone.now()
             self.order.save()
+            sync_commission_reason = "Shipment marked cancelled"
         elif self.status == self.STATUS_REFUNDED and self.order.payment_status != Order.PAYMENT_REFUNDED:
             self.order.payment_status = Order.PAYMENT_REFUNDED
             self.order.status = Order.STATUS_REFUNDED
             self.order.save()
+            sync_commission_reason = "Shipment marked refunded"
         
         super().save(*args, **kwargs)
+        if sync_commission_reason:
+            from apps.promotions.services import DiscountCodeService
+
+            DiscountCodeService.sync_order_commission(
+                self.order,
+                reason=sync_commission_reason,
+            )
+
+        # Notify the customer after the shipment is persisted; the transition
+        # guards above make this fire once per shipped/delivered change.
+        if customer_notification == "shipped":
+            from apps.orders.order_emails import send_shipping_update_email
+
+            send_shipping_update_email(self.order, self)
+        elif customer_notification == "delivered":
+            from apps.orders.order_emails import send_order_delivered_email
+
+            send_order_delivered_email(self.order)
 
 
 class ShipmentTracking(models.Model):
@@ -550,7 +658,7 @@ class Transaction(models.Model):
     reference = models.CharField(_("reference"), max_length=255, blank=True)
     
     amount = models.DecimalField(_("amount"), max_digits=10, decimal_places=2)
-    currency = models.CharField(_("currency"), max_length=3, default="USD")
+    currency = models.CharField(_("currency"), max_length=3, default="GHS")
     
     status = models.CharField(_("status"), max_length=20, choices=TRANSACTION_STATUS_CHOICES, default=TRANSACTION_STATUS_PENDING)
     
@@ -585,3 +693,92 @@ class Transaction(models.Model):
     
     def __str__(self):
         return f"{self.transaction_type} - {self.transaction_id} - {self.amount}"
+
+
+def default_fallback_rates():
+    """Seed value mirroring the historical hardcoded ShippingCalculator rates."""
+    return {
+        "GH": {"base": "15.00", "per_kg": "5.00", "free_shipping_threshold": "500.00"},
+        "NG": {"base": "20.00", "per_kg": "7.00", "free_shipping_threshold": "150.00"},
+        "KE": {"base": "18.00", "per_kg": "6.00", "free_shipping_threshold": "120.00"},
+        "ZA": {"base": "25.00", "per_kg": "8.00", "free_shipping_threshold": "200.00"},
+        "DEFAULT": {"base": "30.00", "per_kg": "10.00", "free_shipping_threshold": "500.00"},
+    }
+
+
+def default_shipping_methods():
+    return {
+        "standard": {"name": "Standard Shipping", "multiplier": "1.0", "estimated_days": "3-7 business days"},
+        "express": {"name": "Express Shipping", "multiplier": "2.0", "estimated_days": "1-3 business days"},
+        "overnight": {"name": "Overnight Shipping", "multiplier": "3.0", "estimated_days": "Next business day"},
+    }
+
+
+SHIPPING_CONFIG_CACHE_KEY = "shipping_config_v1"
+
+
+class ShippingConfig(models.Model):
+    """Singleton runtime configuration for shipping.
+
+    Terminal Africa is the primary rate engine when use_carrier_rates is on;
+    the fallback_rates/shipping_methods JSON drives the internal calculator
+    otherwise. Overlays (free_shipping_all, threshold, popular_addresses,
+    pickup) apply on top of either source. Money values inside JSON fields
+    are stored as strings and Decimal-parsed on read.
+    """
+
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+
+    use_carrier_rates = models.BooleanField(_("use carrier rates"), default=True)
+    free_shipping_all = models.BooleanField(_("free shipping for all"), default=False)
+    free_shipping_threshold = models.DecimalField(
+        _("free shipping threshold"), max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    pickup_enabled = models.BooleanField(_("in-store pickup enabled"), default=False)
+
+    handling_fee = models.DecimalField(
+        _("handling fee"), max_digits=10, decimal_places=2, default=Decimal("0.00")
+    )
+    max_shipping_cap = models.DecimalField(
+        _("max shipping cap"), max_digits=10, decimal_places=2, null=True, blank=True
+    )
+    fallback_surcharge_percent = models.DecimalField(
+        _("fallback surcharge percent"), max_digits=5, decimal_places=2, default=Decimal("0.00")
+    )
+
+    # [{"code": "GH", "name": "Ghana"}] — empty list means ship anywhere
+    allowed_countries = models.JSONField(_("allowed countries"), default=list, blank=True)
+    fallback_rates = models.JSONField(_("fallback rates"), default=default_fallback_rates)
+    shipping_methods = models.JSONField(_("shipping methods"), default=default_shipping_methods)
+    # [{"id", "name", "region", "country", "price", "active"}] — price "0.00" = free
+    popular_addresses = models.JSONField(_("popular addresses"), default=list, blank=True)
+
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        db_table = "shipping_config"
+        verbose_name = _("shipping config")
+        verbose_name_plural = _("shipping config")
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+        from django.core.cache import cache
+        cache.delete(SHIPPING_CONFIG_CACHE_KEY)
+
+    @classmethod
+    def get(cls) -> "ShippingConfig":
+        config, _created = cls.objects.get_or_create(pk=1)
+        return config
+
+    @classmethod
+    def get_cached(cls) -> "ShippingConfig":
+        from django.core.cache import cache
+        config = cache.get(SHIPPING_CONFIG_CACHE_KEY)
+        if config is None:
+            config = cls.get()
+            cache.set(SHIPPING_CONFIG_CACHE_KEY, config, 60)
+        return config
+
+    def __str__(self):
+        return "Shipping configuration"

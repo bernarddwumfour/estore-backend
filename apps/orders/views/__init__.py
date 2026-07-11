@@ -16,6 +16,7 @@ from .user_order_views import (
     order_items,
     cancel_order,
     order_payment_options,
+    checkout_meta,
 )
 
 from .payment_views import (
@@ -28,6 +29,9 @@ from .payment_views import (
 from .shipping_views import (
     get_shipping_rates,
     get_shipping_options,
+    get_shipping_meta,
+    get_popular_addresses,
+    admin_shipping_config,
 )
 
 from .admin_order_views import (
@@ -36,6 +40,7 @@ from .admin_order_views import (
     admin_order_by_number,
     admin_update_order_status,
     admin_update_payment_status,
+    admin_verify_order_payment,
     admin_order_stats,
     admin_order_analytics,
     admin_export_orders,
@@ -91,6 +96,7 @@ __all__ = [
     # User order views
     'user_orders',
     'create_order',
+    'checkout_meta',
     'order_detail',
     'order_items',
     'cancel_order',
@@ -103,12 +109,16 @@ __all__ = [
     # Shipping views
     'get_shipping_rates',
     'get_shipping_options',
+    'get_shipping_meta',
+    'get_popular_addresses',
+    'admin_shipping_config',
     # Admin order views
     'admin_order_list',
     'admin_order_detail',
     'admin_order_by_number',
     'admin_update_order_status',
     'admin_update_payment_status',
+    'admin_verify_order_payment',
     'admin_order_stats',
     'admin_order_analytics',
     'admin_export_orders',

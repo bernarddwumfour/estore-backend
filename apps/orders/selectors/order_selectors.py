@@ -17,7 +17,7 @@ def get_order_by_id(order_id: str, include_cancelled: bool = False) -> Optional[
     """Get order by ID or order number"""
     try:
         queryset = Order.objects.select_related(
-            'user', 'shipping_address', 'billing_address'
+            'user', 'shipping_address', 'billing_address', 'discount_code', 'affiliate', 'affiliate__user'
         ).prefetch_related("items", "items__variant", "transactions")
         
         if not include_cancelled:
@@ -42,7 +42,7 @@ def get_user_orders(
 ) -> Tuple[List[Order], int]:
     """Get paginated orders for a user"""
     queryset = Order.objects.filter(user=user).select_related(
-        'shipping_address', 'billing_address'
+        'shipping_address', 'billing_address', 'discount_code', 'affiliate', 'affiliate__user'
     ).prefetch_related('items', 'items__variant')
     
     if status:
@@ -69,6 +69,8 @@ def get_admin_orders_filtered(
     date_to: str = None,
     min_total: float = None,
     max_total: float = None,
+    has_discount: bool = None,
+    has_affiliate: bool = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
 ) -> Tuple[List[Order], int, Dict]:
@@ -76,7 +78,7 @@ def get_admin_orders_filtered(
     Get filtered, sorted, and paginated orders for admin
     """
     queryset = Order.objects.select_related(
-        'user', 'shipping_address', 'billing_address'
+        'user', 'shipping_address', 'billing_address', 'discount_code', 'affiliate', 'affiliate__user'
     ).prefetch_related('items', 'items__variant', 'transactions')
     
     # Filter by status
@@ -90,6 +92,15 @@ def get_admin_orders_filtered(
     # Filter by payment method
     if payment_method:
         queryset = queryset.filter(payment_method=payment_method)
+
+    if has_discount is not None:
+        if has_discount:
+            queryset = queryset.exclude(discount_code_text="")
+        else:
+            queryset = queryset.filter(Q(discount_code_text="") | Q(discount_code_text__isnull=True))
+
+    if has_affiliate is not None:
+        queryset = queryset.filter(affiliate__isnull=not has_affiliate)
     
     # Search by order number, customer name, email
     if search:
@@ -102,7 +113,12 @@ def get_admin_orders_filtered(
             Q(user__first_name__icontains=search) |
             Q(user__last_name__icontains=search) |
             Q(shipping_address__first_name__icontains=search) |
-            Q(shipping_address__last_name__icontains=search)
+            Q(shipping_address__last_name__icontains=search) |
+            Q(discount_code_text__icontains=search) |
+            Q(entered_discount_code_text__icontains=search) |
+            Q(affiliate__user__email__icontains=search) |
+            Q(affiliate__user__first_name__icontains=search) |
+            Q(affiliate__user__last_name__icontains=search)
         )
     
     # Filter by date range
@@ -125,6 +141,7 @@ def get_admin_orders_filtered(
         'status': 'status',
         'payment_status': 'payment_status',
         'order_number': 'order_number',
+        'discount_amount': 'discount_amount',
     }
     
     if sort_by in allowed_sort_fields:

@@ -21,6 +21,7 @@ from .order_schemas import (
 from .shipment_schemas import (
     serialize_shipment_info,
     serialize_shipment_list,
+    serialize_tracking_history,
     validate_shipment_update,
 )
 
@@ -33,6 +34,12 @@ from .transaction_schemas import (
 
 from .common_schemas import (
     serialize_pagination_metadata,
+)
+
+from .shipping_schemas import (
+    validate_shipping_config_update,
+    serialize_shipping_config,
+    serialize_popular_address,
 )
 
 __all__ = [
@@ -51,6 +58,7 @@ __all__ = [
     # Shipment schemas
     'serialize_shipment_info',
     'serialize_shipment_list',
+    'serialize_tracking_history',
     'validate_shipment_update',
     # Transaction schemas
     'serialize_transaction',
@@ -59,4 +67,8 @@ __all__ = [
     'validate_refund_request',
     # Common schemas
     'serialize_pagination_metadata',
+    # Shipping config schemas
+    'validate_shipping_config_update',
+    'serialize_shipping_config',
+    'serialize_popular_address',
 ]

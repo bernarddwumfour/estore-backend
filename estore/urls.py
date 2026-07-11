@@ -32,6 +32,8 @@ urlpatterns = [
                 path("promotions", include("apps.promotions.urls")),
                 path("orders", include("apps.orders.urls")),
                 path("common", include("apps.common.urls")),
+                path("marketing", include("apps.marketing.urls")),
+                path("social", include("apps.social.urls")),
             ]
         ),
     ),

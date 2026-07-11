@@ -19,9 +19,55 @@ from apps.orders.schemas import (
     serialize_pagination_metadata,
 )
 from apps.orders.order_service import OrderService
+from apps.orders.shipment_service import ShipmentService
 from apps.orders.models import Order, OrderItem
 
 logger = logging.getLogger(__name__)
+
+
+def _transition_order(order_id, status, admin_note=None, user=None,
+                      carrier=None, tracking_number=None, skip_behavior=None):
+    """
+    Route an admin status change to the right domain: shipped/delivered are
+    managed through the order's shipment (which syncs the order status and
+    sends customer emails); everything else goes through OrderService.
+    Returns (order, error) like the services do.
+    """
+    if status in (Order.STATUS_SHIPPED, Order.STATUS_DELIVERED):
+        shipment = ShipmentService.get_shipment_by_order_id(order_id)
+
+        if status == Order.STATUS_SHIPPED and not shipment:
+            # Shipments are created pending; marking shipped below dispatches it.
+            shipment, error = ShipmentService.create_shipment(
+                order_id=order_id,
+                notes=admin_note or "",
+                created_by=user,
+            )
+            if error:
+                return None, error
+        elif not shipment:
+            return None, {"status": "Order has no shipment — mark it shipped first"}
+
+        shipment, error = ShipmentService.update_shipment_status(
+            shipment_id=str(shipment.id),
+            status=status,
+            description=admin_note or "",
+            tracking_number=tracking_number,
+            carrier=carrier,
+            created_by=user,
+        )
+        if error:
+            return None, error
+        shipment.order.refresh_from_db()
+        return shipment.order, None
+
+    return OrderService.update_order_status(
+        order_id=order_id,
+        status=status,
+        admin_note=admin_note,
+        skip_behavior=skip_behavior,
+        user=user,
+    )
 
 
 @csrf_exempt
@@ -42,12 +88,16 @@ def admin_order_list(request):
         date_to = request.GET.get("date_to")
         min_total = request.GET.get("min_total")
         max_total = request.GET.get("max_total")
+        has_discount = request.GET.get("has_discount")
+        has_affiliate = request.GET.get("has_affiliate")
         
         sort_by = request.GET.get("sort_by", "created_at")
         sort_order = request.GET.get("sort_order", "desc")
         
         min_total_float = float(min_total) if min_total else None
         max_total_float = float(max_total) if max_total else None
+        has_discount_bool = None if has_discount in (None, "") else has_discount.lower() == "true"
+        has_affiliate_bool = None if has_affiliate in (None, "") else has_affiliate.lower() == "true"
         
         orders, total, pagination_meta = get_admin_orders_filtered(
             page=page,
@@ -60,6 +110,8 @@ def admin_order_list(request):
             date_to=date_to if date_to else None,
             min_total=min_total_float,
             max_total=max_total_float,
+            has_discount=has_discount_bool,
+            has_affiliate=has_affiliate_bool,
             sort_by=sort_by,
             sort_order=sort_order,
         )
@@ -146,19 +198,22 @@ def admin_update_order_status(request, order_id):
         if errors:
             return APIResponse.validation_error(errors)
 
-        tracking_number = cleaned.get('tracking_number')
-        carrier = cleaned.get('carrier')
-        
-        order, error = OrderService.update_order_status(
+        order, error = _transition_order(
             order_id=order_id,
             status=cleaned["status"],
             admin_note=cleaned.get("admin_note"),
-            carrier=carrier,
-            tracking_number=tracking_number,
+            carrier=cleaned.get("carrier"),
+            tracking_number=cleaned.get("tracking_number"),
+            skip_behavior=cleaned.get("skip_behavior"),
             user=request.user,
         )
 
         if error:
+            if "__conflict__" in error:
+                return APIResponse.conflict(
+                    message="Status change skips pipeline steps",
+                    errors=error["__conflict__"],
+                )
             return APIResponse.validation_error(error)
 
         return APIResponse.success(
@@ -168,6 +223,56 @@ def admin_update_order_status(request, order_id):
 
     except Exception as e:
         logger.error(f"Update order status error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+def admin_verify_order_payment(request, order_id):
+    """Admin: Reconcile a pending payment with Paystack.
+
+    Re-checks the stored transaction reference against Paystack and marks the
+    order paid (or failed, for terminal gateway statuses). Covers payments that
+    completed on Paystack but whose redirect/webhook never reached us.
+    """
+    try:
+        from apps.orders.selectors import get_order_by_id
+
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if not order:
+            return APIResponse.not_found("Order not found")
+
+        if order.payment_status == Order.PAYMENT_PAID:
+            return APIResponse.success(
+                data={"order": serialize_order(order, is_admin=True)},
+                message="Order is already marked as paid",
+            )
+
+        if not order.payment_intent_id:
+            return APIResponse.validation_error(
+                {"payment": "No Paystack reference is stored for this order"}
+            )
+
+        success, result = OrderService.verify_payment(
+            order.payment_intent_id, str(order.id)
+        )
+
+        order = get_order_by_id(order_id, include_cancelled=True)
+        if success:
+            return APIResponse.success(
+                data={"order": serialize_order(order, is_admin=True)},
+                message="Payment verified with Paystack — order marked as paid",
+            )
+
+        return APIResponse.bad_request(
+            message=result.get("error", "Payment verification failed"),
+            errors={"payment_status": order.payment_status},
+        )
+
+    except Exception as e:
+        logger.error(f"Verify order payment error: {str(e)}")
         return APIResponse.server_error()
 
 
@@ -334,6 +439,10 @@ def admin_export_orders(request):
                 "Shipping",
                 "Tax",
                 "Discount",
+                "Entered Discount Code",
+                "Discount Code",
+                "Affiliate",
+                "Affiliate Commission",
                 "Total",
                 "Item Count",
                 "Created At",
@@ -353,6 +462,10 @@ def admin_export_orders(request):
                     float(order.shipping_cost),
                     float(order.tax_amount),
                     float(order.discount_amount),
+                    order.entered_discount_code_text or "",
+                    order.discount_code_text or "",
+                    order.affiliate.user.email if order.affiliate else "",
+                    float(order.affiliate_commission_amount or 0),
                     float(order.total),
                     order.item_count,
                     order.created_at.strftime("%Y-%m-%d %H:%M:%S"),
@@ -403,25 +516,43 @@ def admin_bulk_order_action(request):
                 except Exception as e:
                     results["failed"].append({"id": order_id, "reason": str(e)})
 
-        elif action in ["confirm", "process", "ship", "deliver"]:
+        elif action in ["confirm", "process", "ready_for_shipping", "ship", "deliver", "complete"]:
             status_map = {
                 "confirm": "confirmed",
                 "process": "processing",
+                "ready_for_shipping": "ready_for_shipping",
                 "ship": "shipped",
                 "deliver": "delivered",
+                "complete": "completed",
             }
             new_status = status_map.get(action)
+            skip_behavior = data.get("skip_behavior")
+            if skip_behavior is not None and skip_behavior not in ("skip", "complete"):
+                return APIResponse.bad_request("skip_behavior must be 'skip' or 'complete'")
 
             for order_id in order_ids:
                 try:
-                    order, error = OrderService.update_order_status(
+                    order, error = _transition_order(
                         order_id=order_id,
                         status=new_status,
                         admin_note=f"Bulk {action} action by admin",
+                        skip_behavior=skip_behavior,
                         user=request.user,
                     )
                     if error:
-                        results["failed"].append({"id": order_id, "reason": str(error)})
+                        if "__conflict__" in error:
+                            conflict = error["__conflict__"]
+                            results["failed"].append({
+                                "id": order_id,
+                                "reason": (
+                                    "Skips steps: "
+                                    + ", ".join(conflict.get("skipped_statuses", []))
+                                    + " — retry with skip_behavior 'skip' or 'complete'"
+                                ),
+                                "conflict": conflict,
+                            })
+                        else:
+                            results["failed"].append({"id": order_id, "reason": str(error)})
                     else:
                         results["success"].append(
                             {"id": order_id, "order_number": order.order_number}

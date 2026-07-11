@@ -88,7 +88,7 @@ def admin_process_refund(request, order_id):
         if not order:
             return APIResponse.not_found("Order not found")
         
-        if order.payment_status not in [Order.PAYMENT_PAID, getattr(Order, 'PAYMENT_PARTIALLY_REFUNDED', 'paid')]:
+        if order.payment_status not in [Order.PAYMENT_PAID, Order.PAYMENT_PARTIALLY_REFUNDED]:
             return APIResponse.bad_request("Order cannot be refunded in its current payment status")
         
         transaction_obj, error = TransactionService.record_refund(

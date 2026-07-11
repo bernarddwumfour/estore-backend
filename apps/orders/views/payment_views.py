@@ -135,6 +135,24 @@ def paystack_webhook(request):
             else:
                 logger.error(f"Webhook: Payment verification failed for {reference}: {result}")
 
+        elif event == "charge.failed":
+            data = event_data.get("data", {})
+            reference = data.get("reference")
+
+            # Resolve the order from metadata first, then the cached reference.
+            order_id = (data.get("metadata") or {}).get("order_id")
+            if not order_id and reference:
+                from django.core.cache import cache
+                order_id = cache.get(f"paystack_ref_{reference}")
+
+            if order_id:
+                OrderService.mark_payment_failed(
+                    order_id, reason=f"Paystack charge.failed webhook (ref={reference})"
+                )
+                logger.info(f"Webhook: Payment failed for reference {reference}; stock released")
+            else:
+                logger.error(f"Webhook: charge.failed could not resolve order for ref {reference}")
+
         elif event == "charge.dispute.create":
             logger.warning(f"Dispute created: {event_data.get('data', {}).get('reference')}")
 
@@ -144,8 +162,12 @@ def paystack_webhook(request):
         return JsonResponse({"status": "success"})
 
     except Exception as e:
-        logger.error(f"Webhook error: {str(e)}")
-        return JsonResponse({"status": "error", "message": str(e)}, status=500)
+        # Log internally; never echo internal error detail to the caller.
+        # Return 200 so Paystack does not retry-storm a non-recoverable error
+        # (the signature has already been verified above and processing is
+        # idempotent on the transaction reference).
+        logger.exception(f"Webhook processing error: {str(e)}")
+        return JsonResponse({"status": "received"}, status=200)
 
 
 @csrf_exempt
@@ -166,15 +188,22 @@ def payment_callback(request):
         if error or not transaction_data:
             return APIResponse.bad_request(f"Verification failed: {error}")
 
-        if transaction_data.get('status') != 'success':
-            return APIResponse.bad_request("Payment was not successful")
-
         metadata = transaction_data.get('metadata', {})
         order_id = metadata.get('order_id')
 
         if not order_id:
             from django.core.cache import cache
             order_id = cache.get(f'paystack_ref_{payment_ref}')
+
+        if transaction_data.get('status') != 'success':
+            # Release reserved stock and mark the order failed for terminal
+            # failures so it isn't left stranded in 'pending'.
+            gateway_status = transaction_data.get('status')
+            if order_id and gateway_status in ('failed', 'abandoned', 'reversed'):
+                OrderService.mark_payment_failed(
+                    order_id, reason=f"Paystack status: {gateway_status}"
+                )
+            return APIResponse.bad_request("Payment was not successful")
 
         if not order_id:
             return APIResponse.not_found("Order not found")

@@ -1,9 +1,11 @@
 # estore/utils/email_util.py
+"""
+Legacy wrappers kept for import stability — all logic lives in the base
+EmailService (estore/utils/email_service.py). New code should use
+`from estore.utils.email_service import email_service` directly.
+"""
 
-import logging
-from .brevo_mailer import  send_email as brevo_send_email
-
-logger = logging.getLogger(__name__)
+from estore.utils.email_service import email_service
 
 
 def send_email(
@@ -13,24 +15,28 @@ def send_email(
     html_message: str = None,
     recipient_name: str = None,
 ) -> bool:
-    """
-    Send email using Brevo (Sendinblue)
-    Falls back to console if API key not configured
-    """
-    from django.conf import settings
-    
-    # Try to send via Brevo
-    if getattr(settings, 'BREVO_API_KEY', None):
-        return brevo_send_email(
-            recipient_email=recipient_email,
-            subject=subject,
-            message_text=message_text,
-            html_message=html_message,
-            recipient_name=recipient_name,
-        )
-    
-    # Fallback to console output for development
-    logger.info(f"Email would be sent to {recipient_email}")
-    logger.info(f"Subject: {subject}")
-    logger.info(f"Body: {message_text}")
-    return True
+    return email_service.send(
+        recipient_email=recipient_email,
+        subject=subject,
+        message_text=message_text,
+        html_message=html_message,
+        recipient_name=recipient_name,
+    )
+
+
+def send_templated_email(
+    recipient_email: str,
+    subject: str,
+    template: str,
+    context: dict = None,
+    recipient_name: str = None,
+    async_send: bool = True,
+) -> bool:
+    return email_service.send_templated(
+        recipient_email=recipient_email,
+        subject=subject,
+        template=template,
+        context=context,
+        recipient_name=recipient_name,
+        async_send=async_send,
+    )

@@ -588,7 +588,18 @@ def pos_create_order(request):
         is_guest = data.get('is_guest', True)
         is_pickup = data.get('is_pickup', True)  # True = in-store pickup, False = shipping
         payment_method = data.get('payment_method', 'pos')
-        
+
+        # POS orders are settled in person: paid at the counter ('pos') or on
+        # delivery. Online checkout (paystack) is not supported here because the
+        # POS flow has no way to redirect the customer to the gateway, and would
+        # otherwise create an uncollectible pending order.
+        allowed_pos_methods = {'pos', 'cash_on_delivery', 'pod'}
+        if payment_method not in allowed_pos_methods:
+            return APIResponse.bad_request(
+                "Unsupported POS payment method. Choose 'pos' (paid in-store) "
+                "or 'cash_on_delivery'."
+            )
+
         # Get or find customer
         if not is_guest and customer_id:
             try:

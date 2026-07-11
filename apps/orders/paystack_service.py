@@ -3,7 +3,7 @@ import hashlib
 import hmac
 import json
 import logging
-from typing import Dict,  Optional, Tuple
+from typing import Any, Dict, Optional, Tuple
 import requests
 from django.conf import settings
 from django.core.cache import cache
@@ -96,6 +96,11 @@ class PaystackService:
                         str(order.id),
                         timeout=3600  # 1 hour
                     )
+                    # Persist the reference so the payment can be reconciled
+                    # with Paystack later even if the redirect/webhook is missed
+                    # (the cache is in-memory and expires).
+                    order.payment_intent_id = payload['reference']
+                    order.save(update_fields=['payment_intent_id', 'updated_at'])
                     return {
                         'authorization_url': data['data']['authorization_url'],
                         'access_code': data['data']['access_code'],
@@ -176,7 +181,7 @@ class PaystackService:
             hashlib.sha512
         ).hexdigest()
         
-        if signature != expected_signature:
+        if not hmac.compare_digest(signature, expected_signature):
             logger.error("Invalid webhook signature")
             return None
         
@@ -186,61 +191,7 @@ class PaystackService:
         except json.JSONDecodeError as e:
             logger.error(f"Invalid webhook payload: {str(e)}")
             return None
-    
-    
-    # apps/orders/services/paystack_service.py
 
-    @classmethod
-    def process_successful_payment(cls, reference: str, order_id: str = None) -> Tuple[bool, Optional[Dict]]:
-        """
-        Process a successful payment after verification
-        """
-        from apps.orders.models import Order
-        from apps.orders.order_service import OrderService
-        
-        # Verify transaction
-        transaction_data, error = cls.verify_transaction(reference)
-        if error or not transaction_data:
-            return False, {'error': error or 'Verification failed'}
-        
-        # Check if transaction was successful
-        if transaction_data.get('status') != 'success':
-            return False, {'error': f'Payment not successful: {transaction_data.get("status")}'}
-        
-        # Find order by reference or order_id
-        if not order_id:
-            from django.core.cache import cache
-            cached_order_id = cache.get(f'paystack_ref_{reference}')
-            if cached_order_id:
-                order_id = cached_order_id
-        
-        if not order_id:
-            return False, {'error': 'Order not found'}
-        
-        try:
-            order = Order.objects.get(id=order_id)
-        except Order.DoesNotExist:
-            return False, {'error': 'Order not found'}
-        
-        # Only update if not already paid
-        if order.payment_status != Order.PAYMENT_PAID:
-            order, error = OrderService.update_payment_status(
-                order_id=str(order.id),
-                payment_status='paid',
-                payment_intent_id=transaction_data.get('reference'),
-                payment_receipt_url=transaction_data.get('receipt_url', ''),
-            )
-            
-            if error:
-                return False, error
-        
-        # Return both order and transaction data
-        return True, {
-            'order': order,
-            'transaction': transaction_data
-        }
-        
-    
     @classmethod
     def get_transaction_status(cls, reference: str) -> Optional[str]:
         """
@@ -255,16 +206,17 @@ class PaystackService:
         return transaction_data.get('status')
     
     @classmethod
-    def refund_transaction(cls, reference: str, amount: int = None) -> Tuple[bool, Optional[str]]:
+    def refund_transaction(cls, reference: str, amount: int = None) -> Tuple[bool, Any]:
         """
         Refund a Paystack transaction
-        
+
         Args:
             reference: Transaction reference
-            amount: Amount to refund in kobo (if None, full refund)
-            
+            amount: Amount to refund in kobo/pesewas (if None, full refund)
+
         Returns:
-            Tuple of (success, error_message)
+            Tuple of (success, data_or_error). On success the second element is
+            the Paystack refund payload (dict); on failure it is an error string.
         """
         try:
             payload = {
@@ -272,28 +224,29 @@ class PaystackService:
             }
             if amount:
                 payload['amount'] = amount
-            
+
             headers = {
                 'Authorization': f'Bearer {cls.SECRET_KEY}',
                 'Content-Type': 'application/json',
             }
-            
+
             response = requests.post(
                 f'{cls.BASE_URL}/refund',
                 json=payload,
                 headers=headers,
                 timeout=30
             )
-            
+
             if response.status_code == 200:
                 data = response.json()
                 if data.get('status'):
-                    return True, None
+                    return True, data.get('data', {})
                 else:
                     return False, data.get('message', 'Refund failed')
             else:
+                logger.error(f"Paystack refund API error: {response.status_code} - {response.text}")
                 return False, f"Refund API error: {response.status_code}"
-                
+
         except Exception as e:
             logger.error(f"Paystack refund error: {str(e)}")
             return False, str(e)
@@ -314,26 +267,34 @@ class PaystackService:
         transaction_data, error = cls.verify_transaction(reference)
         if error or not transaction_data:
             return False, {'error': error or 'Verification failed'}
-        
-        # Check if transaction was successful
-        if transaction_data.get('status') != 'success':
-            return False, {'error': f'Payment not successful: {transaction_data.get("status")}'}
-        
-        # Find order by reference or order_id
+
+        # Resolve the order id first (needed for both success and failure paths).
         actual_order_id = order_id
-        
+
         if not actual_order_id:
             from django.core.cache import cache
             actual_order_id = cache.get(f'paystack_ref_{reference}')
-        
+
         if not actual_order_id:
             # Try to find from metadata
             metadata = transaction_data.get('metadata', {})
             actual_order_id = metadata.get('order_id')
-        
+
+        # Check if transaction was successful
+        gateway_status = transaction_data.get('status')
+        if gateway_status != 'success':
+            # For terminal failures, release the order's reserved stock and mark
+            # it failed so it isn't stranded in 'pending'. Transient/unknown
+            # statuses are left for retry without altering the order.
+            if actual_order_id and gateway_status in ('failed', 'abandoned', 'reversed'):
+                OrderService.mark_payment_failed(
+                    actual_order_id, reason=f"Paystack status: {gateway_status}"
+                )
+            return False, {'error': f'Payment not successful: {gateway_status}'}
+
         if not actual_order_id:
             return False, {'error': 'Order not found'}
-        
+
         try:
             order = Order.objects.get(id=actual_order_id)
         except Order.DoesNotExist:
@@ -344,7 +305,30 @@ class PaystackService:
         if existing_transaction:
             # Transaction already recorded
             return True, {'order': order, 'transaction': transaction_data, 'existing': True}
-        
+
+        # Verify the captured amount and currency match what the order expects
+        # before recording the charge or marking the order paid. The amount was
+        # set server-side at initialization; this guards against any tampered or
+        # partial capture being accepted as full payment.
+        expected_amount_minor = int((order.total * 100).to_integral_value())
+        paid_amount_minor = int(transaction_data.get('amount', 0) or 0)
+        paid_currency = (transaction_data.get('currency') or '').upper()
+        expected_currency = (order.currency or '').upper()
+
+        if paid_amount_minor != expected_amount_minor or (
+            paid_currency and expected_currency and paid_currency != expected_currency
+        ):
+            logger.error(
+                "Payment amount/currency mismatch for order %s: expected %s %s, "
+                "got %s %s (ref=%s)",
+                order.order_number, expected_amount_minor, expected_currency,
+                paid_amount_minor, paid_currency, reference,
+            )
+            return False, {
+                'error': 'Payment amount or currency does not match the order. '
+                         'Please contact support.'
+            }
+
         # CREATE TRANSACTION RECORD
         from django.utils import timezone
         
@@ -378,10 +362,15 @@ class PaystackService:
                 payment_intent_id=reference,
                 payment_receipt_url=transaction_data.get('receipt_url', ''),
             )
-            
+
             if error:
                 return False, error
-        
+
+            # Confirmation email — inside the not-already-paid guard so it fires
+            # once even though webhook and verify endpoint both converge here.
+            from apps.orders.order_emails import send_order_confirmation_email
+            send_order_confirmation_email(order, transaction_record)
+
         return True, {
             'order': order,
             'transaction': transaction_data,

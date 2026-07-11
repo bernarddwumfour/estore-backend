@@ -78,7 +78,9 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
         "status": order.status,
         "status_display": order.get_status_display(),
         "payment_status": order.payment_status,
+        "payment_status_display": order.get_payment_status_display(),
         "payment_method": order.payment_method,
+        "payment_method_display": order.get_payment_method_display(),
         "payment_type": getattr(order, 'payment_type', 'online'),
         "customer_name": order.customer_name,
         "customer_email": order.customer_email,
@@ -86,10 +88,14 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
         "shipping_cost": float(order.shipping_cost),
         "tax_amount": float(order.tax_amount),
         "discount_amount": float(order.discount_amount),
+        "discount_code": order.discount_code_text or None,
+        "entered_discount_code": order.entered_discount_code_text or None,
+        "affiliate_commission_amount": float(getattr(order, "affiliate_commission_amount", 0) or 0),
         "total": float(order.total),
         "currency": order.currency,
         "item_count": total_item_count,  # Use calculated total
         "shipping_method": order.shipping_method,
+        "is_pickup": order.is_pickup,
         "customer_note": order.customer_note,
         "created_at": order.created_at.isoformat(),
         "updated_at": order.updated_at.isoformat(),
@@ -117,10 +123,31 @@ def serialize_order(order, is_admin: bool = False, detailed: bool = True) -> Dic
             "pod_reason": getattr(order, 'pod_reason', ''),
             "paid_at": order.paid_at.isoformat() if order.paid_at else None,
             "confirmed_at": order.confirmed_at.isoformat() if order.confirmed_at else None,
+            "processing_at": order.processing_at.isoformat() if order.processing_at else None,
+            "ready_for_shipping_at": order.ready_for_shipping_at.isoformat() if order.ready_for_shipping_at else None,
             "shipped_at": order.shipped_at.isoformat() if order.shipped_at else None,
             "delivered_at": order.delivered_at.isoformat() if order.delivered_at else None,
+            "completed_at": order.completed_at.isoformat() if order.completed_at else None,
             "cancelled_at": order.cancelled_at.isoformat() if order.cancelled_at else None,
+            "affiliate_commission_amount": float(getattr(order, "affiliate_commission_amount", 0) or 0),
         })
+
+    if order.affiliate:
+        data["affiliate"] = {
+            "id": str(order.affiliate.id),
+            "email": order.affiliate.user.email,
+            "name": order.affiliate.user.full_name,
+            "referral_code": order.affiliate.referral_code,
+            "commission_amount": float(getattr(order, "affiliate_commission_amount", 0) or 0),
+        }
+        data["affiliate_email"] = order.affiliate.user.email
+        data["affiliate_name"] = order.affiliate.user.full_name
+        data["affiliate_referral_code"] = order.affiliate.referral_code
+    else:
+        data["affiliate"] = None
+        data["affiliate_email"] = None
+        data["affiliate_name"] = None
+        data["affiliate_referral_code"] = None
     
     # Addresses
     if is_admin or detailed:
@@ -297,7 +324,7 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     
     # ==================== VALIDATE PAYMENT METHOD ====================
     payment_method = data.get('payment_method')
-    valid_payment_methods = ['paystack', 'pod', 'cash_on_delivery']
+    valid_payment_methods = ['paystack', 'pod']
     
     if not payment_method:
         errors['payment_method'] = "Payment method is required"
@@ -311,6 +338,27 @@ def validate_order_create(data: Dict[str, Any], is_authenticated: bool = False) 
     for field in optional_fields:
         if field in data:
             cleaned[field] = data[field]
+
+    shipping_method = data.get('shipping_method')
+    if shipping_method is not None:
+        if not isinstance(shipping_method, str):
+            errors['shipping_method'] = "Shipping method must be a string"
+        else:
+            cleaned['shipping_method'] = shipping_method.strip()[:100]
+
+    popular_address_id = data.get('popular_address_id')
+    if popular_address_id is not None:
+        if not isinstance(popular_address_id, str):
+            errors['popular_address_id'] = "Popular address id must be a string"
+        else:
+            cleaned['popular_address_id'] = popular_address_id.strip()[:64]
+
+    discount_code = data.get("discount_code", "")
+    if discount_code:
+        if not isinstance(discount_code, str):
+            errors["discount_code"] = "Discount code must be a string"
+        else:
+            cleaned["discount_code"] = discount_code.strip().upper()
     
     if 'currency' not in cleaned and 'currency' not in errors:
         cleaned['currency'] = 'GHS'
@@ -327,23 +375,33 @@ def validate_order_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], 
     cleaned = {}
     
     status = data.get('status')
-    valid_statuses = ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled', 'refunded']
-    
+    valid_statuses = [
+        'confirmed', 'processing', 'ready_for_shipping', 'shipped',
+        'delivered', 'completed', 'cancelled',
+    ]
+
     if not status:
         errors['status'] = "Status is required"
     elif status not in valid_statuses:
         errors['status'] = f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
     else:
         cleaned['status'] = status
-    
+
     if 'admin_note' in data:
         cleaned['admin_note'] = data['admin_note']
-    
+
     if 'carrier' in data:
         cleaned['carrier'] = data['carrier']
-    
+
     if 'tracking_number' in data:
         cleaned['tracking_number'] = data['tracking_number']
+
+    skip_behavior = data.get('skip_behavior')
+    if skip_behavior is not None:
+        if skip_behavior not in ('skip', 'complete'):
+            errors['skip_behavior'] = "skip_behavior must be 'skip' or 'complete'"
+        else:
+            cleaned['skip_behavior'] = skip_behavior
     
     if errors:
         return None, errors
@@ -357,7 +415,7 @@ def validate_payment_status_update(data: Dict[str, Any]) -> Tuple[Optional[Dict]
     cleaned = {}
     
     payment_status = data.get('payment_status')
-    valid_statuses = ['pending', 'paid', 'failed', 'refunded']
+    valid_statuses = ['pending', 'paid', 'failed', 'partially_refunded', 'refunded']
     
     if not payment_status:
         errors['payment_status'] = "Payment status is required"
@@ -384,7 +442,7 @@ def validate_bulk_order_action(data: Dict[str, Any]) -> Tuple[Optional[Dict], Op
     cleaned = {}
     
     action = data.get('action')
-    valid_actions = ['cancel', 'confirm', 'process', 'ship', 'deliver']
+    valid_actions = ['cancel', 'confirm', 'process', 'ready_for_shipping', 'ship', 'deliver', 'complete']
     
     if not action:
         errors['action'] = "Action is required"

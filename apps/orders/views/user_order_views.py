@@ -91,6 +91,11 @@ def create_order(request):
         with transaction.atomic():
             # Handle user creation/retrieval for guests
             if not is_authenticated:
+                from apps.common.models import GeneralConfig
+                if not GeneralConfig.get_cached().guest_checkout_enabled:
+                    return APIResponse.bad_request(
+                        "Guest checkout is disabled. Please sign in to place an order."
+                    )
                 guest_info = cleaned.get("guest_info", {})
                 
                 if not guest_info.get("email"):
@@ -138,6 +143,9 @@ def create_order(request):
                 billing_address_data=cleaned.get("billing_address"),
                 customer_note=cleaned.get("customer_note", ""),
                 currency=cleaned.get("currency", "GHS"),
+                discount_code=cleaned.get("discount_code", ""),
+                shipping_method_id=cleaned.get("shipping_method", ""),
+                popular_address_id=cleaned.get("popular_address_id", ""),
             )
 
             if error:
@@ -282,4 +290,52 @@ def order_payment_options(request, order_id):
 
     except Exception as e:
         logger.error(f"Payment options error: {str(e)}")
+        return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+def checkout_meta(request):
+    """Public: checkout configuration for the storefront — enabled payment
+    methods, default method, tax rate, currency, guest/min-order rules."""
+    try:
+        from apps.common.models import GeneralConfig
+
+        config = GeneralConfig.get_cached()
+
+        methods = []
+        if config.paystack_enabled:
+            methods.append({
+                "id": "paystack",
+                "name": "Paystack",
+                "description": "Pay with card, mobile money, or bank transfer",
+            })
+        if config.pod_enabled:
+            methods.append({
+                "id": "pod",
+                "name": "Pay on Delivery",
+                "description": "Pay when your order arrives",
+            })
+
+        method_ids = [m["id"] for m in methods]
+        default_method = (
+            config.default_payment_method
+            if config.default_payment_method in method_ids
+            else (method_ids[0] if method_ids else None)
+        )
+
+        return APIResponse.success(
+            data={
+                "payment_methods": methods,
+                "default_payment_method": default_method,
+                "guest_checkout_enabled": config.guest_checkout_enabled,
+                "min_order_value": str(config.min_order_value),
+                "tax_rate": str(config.tax_rate),
+                "tax_inclusive": config.tax_inclusive,
+                "currency": config.currency,
+            },
+            message="Checkout configuration retrieved successfully",
+        )
+    except Exception as e:
+        logger.error(f"Checkout meta error: {str(e)}")
         return APIResponse.server_error()

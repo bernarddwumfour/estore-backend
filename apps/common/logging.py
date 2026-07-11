@@ -157,14 +157,15 @@ def _save_log_to_db_async(app_name, action, severity, description, status_code, 
     try:
         # Import here to avoid circular imports
         from apps.common.models import SystemLog
-        
+        from django.db import transaction
+
         # Get user info
         user_id = None
         user_email = None
         if user:
             user_id = str(user.id) if hasattr(user, 'id') else None
             user_email = user.email if hasattr(user, 'email') else None
-        
+
         # Get request info
         ip_address = None
         path = None
@@ -173,21 +174,35 @@ def _save_log_to_db_async(app_name, action, severity, description, status_code, 
             ip_address = request.META.get('HTTP_X_FORWARDED_FOR', request.META.get('REMOTE_ADDR', None))
             path = request.path
             method = request.method
-        
-        # Create log entry (use create to avoid transaction issues)
-        SystemLog.objects.create(
-            app_name=app_name[:50],
-            action=action[:100],
-            severity=severity,
-            description=description[:1000],
-            status_code=status_code,
-            user_id=user_id,
-            user_email=user_email,
-            ip_address=ip_address,
-            path=path[:500] if path else None,
-            method=method[:10] if method else None,
-            extra_data=extra or {},
-        )
+
+        # Coerce non-JSON-native values (UUID, Decimal, datetime, ...) so the
+        # JSONField write can never fail on serialization.
+        safe_extra = {}
+        if extra:
+            try:
+                safe_extra = json.loads(json.dumps(extra, default=str))
+            except (TypeError, ValueError):
+                safe_extra = {"_unserializable": str(extra)[:1000]}
+
+        # Write inside a savepoint. Audit logging must NEVER be able to roll back
+        # the caller's business transaction: if the INSERT fails while we are
+        # already inside an atomic block, a bare failure would mark the whole
+        # transaction broken. The nested atomic() confines any failure to this
+        # savepoint so the caller's writes still commit.
+        with transaction.atomic():
+            SystemLog.objects.create(
+                app_name=app_name[:50],
+                action=action[:100],
+                severity=severity,
+                description=description[:1000],
+                status_code=status_code,
+                user_id=user_id,
+                user_email=user_email,
+                ip_address=ip_address,
+                path=path[:500] if path else None,
+                method=method[:10] if method else None,
+                extra_data=safe_extra,
+            )
     except Exception as db_error:
         # Silently fail - don't let DB errors break the main logging
         # Use print for debugging in development

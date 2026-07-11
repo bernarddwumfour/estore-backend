@@ -13,6 +13,7 @@ from apps.orders.schemas import (
     serialize_shipment_info,
     serialize_shipment_list,
     serialize_pagination_metadata,
+    serialize_tracking_history,
     validate_shipment_update,
 )
 from apps.orders.models import Order, Shipment
@@ -42,11 +43,8 @@ def admin_create_shipment(request, order_id):
         if not order:
             return APIResponse.not_found("Order not found")
         
-        if order.payment_method == Order.PAYMENT_CASH_ON_DELIVERY:
-            pass
-        elif order.payment_status != Order.PAYMENT_PAID:
-            return APIResponse.bad_request("Order must be paid before creating shipment")
-        
+        # Shipments are created pending; payment is enforced when the shipment
+        # is marked shipped, not at creation.
         shipping_cost = None
         if data.get('shipping_cost'):
             shipping_cost = Decimal(str(data['shipping_cost']))
@@ -129,7 +127,9 @@ def admin_update_shipment_status(request, shipment_id):
                     "carrier": shipment.carrier,
                 },
                 "order": shipment_info,
-                "tracking_history": ShipmentService.get_shipment_tracking(shipment_id),
+                "tracking_history": serialize_tracking_history(
+                    ShipmentService.get_shipment_tracking(str(shipment.id))
+                ),
             },
             message=f"Shipment status updated to {shipment.status}"
         )
@@ -236,7 +236,7 @@ def track_shipment(request, tracking_number):
                 "status": shipment.status,
                 "status_display": shipment.get_status_display(),
                 "estimated_delivery": shipment.estimated_delivery.isoformat() if shipment.estimated_delivery else None,
-                "tracking_history": tracking_history,
+                "tracking_history": serialize_tracking_history(tracking_history),
             },
             message="Tracking information retrieved"
         )

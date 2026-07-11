@@ -37,18 +37,23 @@ def serialize_shipment_info(order, include_tracking: bool = True) -> Dict:
         
         if include_tracking:
             tracking = get_shipment_tracking(str(shipment.id))
-            data["tracking_history"] = [
-                {
-                    "status": t.status,
-                    "status_display": dict(Shipment.STATUS_CHOICES).get(t.status, t.status),
-                    "location": t.location,
-                    "description": t.description,
-                    "created_at": t.created_at.isoformat(),
-                }
-                for t in tracking
-            ]
-    
+            data["tracking_history"] = serialize_tracking_history(tracking)
+
     return data
+
+
+def serialize_tracking_history(tracking: List) -> List[Dict]:
+    """Serialize ShipmentTracking rows for JSON responses"""
+    return [
+        {
+            "status": t.status,
+            "status_display": dict(Shipment.STATUS_CHOICES).get(t.status, t.status),
+            "location": t.location,
+            "description": t.description,
+            "created_at": t.created_at.isoformat(),
+        }
+        for t in tracking
+    ]
 
 
 def serialize_shipment_list(shipments: List, is_admin: bool = False) -> List[Dict]:
@@ -80,7 +85,7 @@ def validate_shipment_update(data: Dict[str, Any]) -> Tuple[Optional[Dict], Opti
     
     shipment_status = data.get('shipment_status')
     if shipment_status:
-        valid_statuses = ['pending', 'processing', 'ready', 'shipped', 'in_transit', 'out_for_delivery', 'delivered', 'failed', 'returned']
+        valid_statuses = [s for s, _ in Shipment.STATUS_CHOICES]
         if shipment_status not in valid_statuses:
             errors['shipment_status'] = f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
         else:

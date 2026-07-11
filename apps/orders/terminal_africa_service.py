@@ -106,7 +106,7 @@ class TerminalAfricaService:
             return None, "Unable to connect to shipping service"
         except Exception as e:
             logger.error(f"Terminal Africa error: {str(e)}")
-            return None, str(e)
+            return None, "Shipping service error. Please try again later."
     
     @classmethod
     def _format_rates_response(cls, rates_data: List[Dict]) -> List[Dict]:
@@ -198,7 +198,7 @@ class TerminalAfricaService:
                 
         except Exception as e:
             logger.error(f"Terminal Africa shipment creation error: {str(e)}")
-            return None, str(e)
+            return None, "Shipping service error. Please try again later."
     
     @classmethod
     def track_shipment(cls, tracking_number: str) -> Tuple[Optional[List[Dict]], Optional[str]]:
@@ -243,7 +243,7 @@ class TerminalAfricaService:
                 
         except Exception as e:
             logger.error(f"Terminal Africa tracking error: {str(e)}")
-            return None, str(e)
+            return None, "Shipping service error. Please try again later."
     
     @classmethod
     def cancel_shipment(cls, shipment_id: str) -> Tuple[bool, Optional[str]]:
@@ -277,7 +277,7 @@ class TerminalAfricaService:
                 
         except Exception as e:
             logger.error(f"Terminal Africa cancellation error: {str(e)}")
-            return False, str(e)
+            return False, "Shipping service error. Please try again later."
     
     @classmethod
     def get_shipment_status(cls, shipment_id: str) -> Tuple[Optional[Dict], Optional[str]]:
@@ -317,7 +317,7 @@ class TerminalAfricaService:
                 
         except Exception as e:
             logger.error(f"Terminal Africa status error: {str(e)}")
-            return None, str(e)
+            return None, "Shipping service error. Please try again later."
     
     @classmethod
     def validate_address(cls, address: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
