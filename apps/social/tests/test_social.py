@@ -82,6 +82,16 @@ class ZernioServiceTests(TestCase):
         self.assertIn("timezone", payload)
 
     @configured
+    def test_400_surfaces_zernio_message(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(
+                400, {"message": "Duplicate content: an identical post was already published"}
+            )
+            result, error = ZernioService.create_post("x", [])
+        self.assertIsNone(result)
+        self.assertIn("Duplicate content", error)
+
+    @configured
     def test_error_statuses_do_not_leak_body(self):
         for status_code, expected in [(401, "Invalid social media API key"), (429, "Rate limit")]:
             with patch("apps.social.zernio_service.requests.request") as mock_request:
@@ -231,15 +241,52 @@ class SocialPostServiceTests(TestCase):
         self.assertIn("status", error)
 
     @configured
-    def test_delete_sent_post_removes_from_zernio(self):
+    def test_delete_published_post_succeeds_despite_zernio_refusal(self):
+        # Zernio can't delete published posts (platform owns them) — the
+        # Zernio call is best-effort and must never block the local delete
         sent = make_social_post(status=SocialPost.STATUS_SENT, zernio_post_id="zp_7")
         with patch.object(
-            ZernioService, "delete_post", return_value=({}, None)
+            ZernioService, "delete_post", return_value=(None, "Published posts cannot be deleted")
         ) as mock_delete:
             deleted, error = SocialPostService.delete_post(sent)
         self.assertTrue(deleted)
+        self.assertIsNone(error)
         mock_delete.assert_called_once_with("zp_7")
         self.assertEqual(SocialPost.objects.count(), 0)
+
+    @configured
+    def test_delete_scheduled_post_cancels_on_zernio(self):
+        from django.utils import timezone
+
+        scheduled = make_social_post(
+            status=SocialPost.STATUS_SENT,
+            zernio_post_id="zp_8",
+            scheduled_for=timezone.now() + timezone.timedelta(hours=2),
+        )
+        with patch.object(
+            ZernioService, "delete_post", return_value=({}, None)
+        ) as mock_delete:
+            deleted, error = SocialPostService.delete_post(scheduled)
+        self.assertTrue(deleted)
+        mock_delete.assert_called_once_with("zp_8")
+        self.assertEqual(SocialPost.objects.count(), 0)
+
+    @configured
+    def test_delete_scheduled_post_blocked_when_cancel_fails(self):
+        from django.utils import timezone
+
+        scheduled = make_social_post(
+            status=SocialPost.STATUS_SENT,
+            zernio_post_id="zp_9",
+            scheduled_for=timezone.now() + timezone.timedelta(hours=2),
+        )
+        with patch.object(
+            ZernioService, "delete_post", return_value=(None, "Social media service timeout")
+        ):
+            deleted, error = SocialPostService.delete_post(scheduled)
+        self.assertFalse(deleted)
+        self.assertIn("Could not cancel", error)
+        self.assertEqual(SocialPost.objects.count(), 1)
 
 
 class SocialApiTests(TestCase):

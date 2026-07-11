@@ -73,6 +73,18 @@ class ZernioService:
                     return response.json(), None
                 except ValueError:
                     return {}, None
+            elif response.status_code == 400:
+                # 400s carry actionable validation messages (e.g. duplicate
+                # content) — surface Zernio's message, not a generic error
+                try:
+                    body = response.json()
+                    message = str(
+                        body.get("message") or body.get("error") or ""
+                    ).strip()[:200]
+                except ValueError:
+                    message = ""
+                logger.error(f"Zernio 400 on {path}: {message}")
+                return None, message or "Social media API error: 400"
             elif response.status_code == 401:
                 logger.error("Zernio authentication failed")
                 return None, "Invalid social media API key"

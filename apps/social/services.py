@@ -191,10 +191,29 @@ class SocialPostService:
 
     @staticmethod
     def delete_post(post: SocialPost) -> Tuple[bool, Optional[str]]:
-        """Delete a post locally, removing it from Zernio first if it was sent."""
-        if post.zernio_post_id:
+        """Delete a post record.
+
+        Zernio only allows deleting draft/scheduled posts — published posts
+        are owned by the platform and must be removed there (Zernio never
+        learns about platform-side deletions either). So:
+        - still-scheduled post: cancel it on Zernio first; block on failure
+          so a "deleted" post can't publish later.
+        - published (or never-sent) post: just remove our record.
+        """
+        is_pending_on_zernio = (
+            post.zernio_post_id
+            and post.scheduled_for is not None
+            and post.scheduled_for > timezone.now()
+        )
+        if is_pending_on_zernio:
             _, error = ZernioService.delete_post(post.zernio_post_id)
             if error:
-                return False, error
+                return False, (
+                    f"Could not cancel the scheduled post on Zernio: {error}"
+                )
+        elif post.zernio_post_id:
+            # Best-effort: Zernio rejects deleting published posts (the
+            # platform owns them) — never let that block the local delete
+            ZernioService.delete_post(post.zernio_post_id)
         post.delete()
         return True, None
