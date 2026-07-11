@@ -6,6 +6,76 @@ from typing import Dict, Any, Tuple, Optional
 from decimal import Decimal, InvalidOperation
 
 
+def _default_low_stock_threshold() -> int:
+    """Store-wide default from GeneralConfig; falls back to the historical 5."""
+    try:
+        from apps.common.models import GeneralConfig
+        return GeneralConfig.get_cached().default_low_stock_threshold
+    except Exception:
+        return 5
+
+
+def _is_blank(value: Any) -> bool:
+    return value is None or (isinstance(value, str) and value.strip() == "")
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off", ""}:
+            return False
+    return bool(value)
+
+
+def _coerce_non_negative_int(value: Any, field: str, errors: Dict[str, str]) -> Optional[int]:
+    if isinstance(value, bool):
+        errors[field] = "Must be non-negative integer"
+        return None
+
+    try:
+        coerced = int(str(value))
+    except (TypeError, ValueError):
+        errors[field] = "Must be non-negative integer"
+        return None
+
+    if coerced < 0:
+        errors[field] = "Must be non-negative integer"
+        return None
+
+    return coerced
+
+
+def _coerce_decimal(
+    value: Any,
+    field: str,
+    errors: Dict[str, str],
+    *,
+    positive: bool = False,
+) -> Optional[Decimal]:
+    try:
+        coerced = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        errors[field] = "Valid decimal number required"
+        return None
+
+    if positive and coerced <= 0:
+        errors[field] = "Must be positive"
+        return None
+    if not positive and coerced < 0:
+        errors[field] = "Cannot be negative"
+        return None
+
+    return coerced
+
+
 def validate_bulk_action(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate bulk action request"""
     errors = {}
@@ -212,7 +282,7 @@ def validate_variant_create(
     cleaned = {}
 
     # Required fields
-    sku = data.get("sku", "").strip()
+    sku = str(data.get("sku", "") or "").strip()
     if not sku:
         errors["sku"] = "This field is required"
     elif len(sku) > 100:
@@ -221,15 +291,12 @@ def validate_variant_create(
         cleaned["sku"] = sku
 
     # Price validation
-    price = data.get("price")
-    try:
-        price = Decimal(str(price))
-        if price <= 0:
-            errors["price"] = "Must be positive"
-        else:
-            cleaned["price"] = price
-    except (InvalidOperation, TypeError, ValueError):
+    if _is_blank(data.get("price")):
         errors["price"] = "Valid decimal number required"
+    else:
+        price = _coerce_decimal(data.get("price"), "price", errors, positive=True)
+        if price is not None:
+            cleaned["price"] = price
 
     # Attributes validation
     attributes = data.get("attributes", {})
@@ -239,53 +306,132 @@ def validate_variant_create(
         cleaned["attributes"] = attributes
 
     # Stock
-    stock = data.get("stock", 0)
-    if not isinstance(stock, int) or stock < 0:
-        errors["stock"] = "Must be non-negative integer"
-    else:
+    stock = _coerce_non_negative_int(data.get("stock", 0), "stock", errors)
+    if stock is not None:
         cleaned["stock"] = stock
 
     # Admin-only fields
     if is_admin:
         discount_amount = data.get("discount_amount", 0)
-        if "cost_price" in data and data["cost_price"] is not None:
-            try:
-                cost_price = Decimal(str(data["cost_price"]))
-                if cost_price < 0:
-                    errors["cost_price"] = "Cannot be negative"
-                else:
-                    cleaned["cost_price"] = cost_price
-            except (InvalidOperation, TypeError, ValueError):
-                errors["cost_price"] = "Valid decimal number required"
+        if "cost_price" in data and not _is_blank(data["cost_price"]):
+            cost_price = _coerce_decimal(data["cost_price"], "cost_price", errors)
+            if cost_price is not None:
+                cleaned["cost_price"] = cost_price
         else:
             cleaned["cost_price"] = Decimal("0.00")
-            
-        try:
-            discount_amount = Decimal(str(discount_amount))
-            if discount_amount < 0:
-                errors["discount_amount"] = "Cannot be negative"
-            elif discount_amount > cleaned.get("price", 0):
+
+        discount_amount = _coerce_decimal(
+            discount_amount, "discount_amount", errors
+        )
+        if discount_amount is not None:
+            if discount_amount > cleaned.get("price", Decimal("0")):
                 errors["discount_amount"] = "Cannot exceed price"
             else:
                 cleaned["discount_amount"] = discount_amount
-        except (InvalidOperation, TypeError, ValueError):
-            errors["discount_amount"] = "Valid decimal number required"
 
-        cleaned["is_default"] = bool(data.get("is_default", False))
-        cleaned["is_active"] = bool(data.get("is_active", True))
-        cleaned["low_stock_threshold"] = int(data.get("low_stock_threshold", 5))
+        cleaned["is_default"] = _coerce_bool(data.get("is_default"), False)
+        cleaned["is_active"] = _coerce_bool(data.get("is_active"), True)
+        low_stock_threshold = _coerce_non_negative_int(
+            data.get("low_stock_threshold", _default_low_stock_threshold()),
+            "low_stock_threshold", errors,
+        )
+        if low_stock_threshold is not None:
+            cleaned["low_stock_threshold"] = low_stock_threshold
 
         for dim in ["weight", "height", "width", "depth"]:
-            if dim in data and data[dim]:
-                try:
-                    cleaned[dim] = Decimal(str(data[dim]))
-                except (InvalidOperation, TypeError, ValueError):
-                    errors[dim] = "Valid decimal number required"
+            if dim in data and not _is_blank(data[dim]):
+                value = _coerce_decimal(data[dim], dim, errors)
+                if value is not None:
+                    cleaned[dim] = value
     else:
         cleaned["discount_amount"] = Decimal(0)
         cleaned["is_default"] = False
         cleaned["is_active"] = True
-        cleaned["low_stock_threshold"] = 5
+        cleaned["low_stock_threshold"] = _default_low_stock_threshold()
+
+    if errors:
+        return None, errors
+
+    return cleaned, None
+
+
+def validate_variant_update(
+    data: Dict[str, Any], is_admin: bool = False
+) -> Tuple[Optional[Dict], Optional[Dict]]:
+    """Validate partial variant updates.
+
+    Multipart form fields arrive as strings, so update validation must coerce
+    values before the service writes them to Decimal/Integer/Boolean fields.
+    """
+    errors = {}
+    cleaned = {}
+
+    if "sku" in data:
+        sku = str(data.get("sku", "") or "").strip()
+        if not sku:
+            errors["sku"] = "This field is required"
+        elif len(sku) > 100:
+            errors["sku"] = "Cannot exceed 100 characters"
+        else:
+            cleaned["sku"] = sku
+
+    if "price" in data:
+        if _is_blank(data["price"]):
+            errors["price"] = "Valid decimal number required"
+        else:
+            price = _coerce_decimal(data["price"], "price", errors, positive=True)
+            if price is not None:
+                cleaned["price"] = price
+
+    if "attributes" in data:
+        attributes = data.get("attributes", {})
+        if not isinstance(attributes, dict):
+            errors["attributes"] = "Must be an object"
+        else:
+            cleaned["attributes"] = attributes
+
+    if "stock" in data:
+        stock = _coerce_non_negative_int(data["stock"], "stock", errors)
+        if stock is not None:
+            cleaned["stock"] = stock
+
+    if is_admin:
+        if "cost_price" in data:
+            if _is_blank(data["cost_price"]):
+                cleaned["cost_price"] = Decimal("0.00")
+            else:
+                cost_price = _coerce_decimal(data["cost_price"], "cost_price", errors)
+                if cost_price is not None:
+                    cleaned["cost_price"] = cost_price
+
+        if "discount_amount" in data:
+            discount_amount = _coerce_decimal(
+                data["discount_amount"], "discount_amount", errors
+            )
+            if discount_amount is not None:
+                cleaned["discount_amount"] = discount_amount
+
+        if "is_default" in data:
+            cleaned["is_default"] = _coerce_bool(data.get("is_default"), False)
+
+        if "is_active" in data:
+            cleaned["is_active"] = _coerce_bool(data.get("is_active"), True)
+
+        if "low_stock_threshold" in data:
+            low_stock_threshold = _coerce_non_negative_int(
+                data["low_stock_threshold"], "low_stock_threshold", errors
+            )
+            if low_stock_threshold is not None:
+                cleaned["low_stock_threshold"] = low_stock_threshold
+
+        for dim in ["weight", "height", "width", "depth"]:
+            if dim in data:
+                if _is_blank(data[dim]):
+                    cleaned[dim] = None
+                else:
+                    value = _coerce_decimal(data[dim], dim, errors)
+                    if value is not None:
+                        cleaned[dim] = value
 
     if errors:
         return None, errors

@@ -12,7 +12,7 @@ from django.conf import settings
 from ..models.user import User
 from ..models.verification_token import VerificationToken
 from urllib.parse import urlencode
-from estore.utils.brevo_mailer import BrevoMailer
+from estore.utils.email_util import send_templated_email
 
 logger = logging.getLogger(__name__)
 
@@ -98,60 +98,19 @@ class VerificationService:
 
     @staticmethod
     def _send_verification_email(user, verification_url):
-        """Send the actual verification email using Brevo"""
+        """Send the verification email via Resend"""
         subject = f"Verify Your Email - {getattr(settings, 'SITE_NAME', 'API')}"
-        
-        # HTML email
-        html_message = f"""<!DOCTYPE html>
-<html>
-<head>
-    <style>
-        body {{ font-family: Arial, sans-serif; line-height: 1.6; }}
-        .container {{ max-width: 600px; margin: 0 auto; }}
-        .button {{
-            background: #4CAF50;
-            color: white;
-            padding: 12px 24px;
-            text-decoration: none;
-            border-radius: 5px;
-            display: inline-block;
-        }}
-        .code {{
-            background: #f5f5f5;
-            padding: 8px;
-            border-radius: 3px;
-            word-break: break-all;
-            display: block;
-            margin: 10px 0;
-        }}
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h2 style="color: #333;">Verify Your Email</h2>
-        <p>Hello <strong>{user.username or user.email}</strong>,</p>
-        <p>Please verify your email address by clicking the button below:</p>
-        <p>
-            <a href="{verification_url}" class="button">
-                Verify Email Address
-            </a>
-        </p>
-        <p>Or copy this link to your browser:<br>
-        <code class="code">{verification_url}</code></p>
-        <p><strong>Note:</strong> This link expires in {getattr(settings, 'EMAIL_VERIFICATION_EXPIRY_HOURS', 24)} hours.</p>
-        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-        <p>Best regards,<br>
-        <strong>{getattr(settings, 'SITE_NAME', 'API')} Team</strong></p>
-    </div>
-</body>
-</html>"""
-        
-        mailer = BrevoMailer()
-        return mailer.send_email(
+
+        return send_templated_email(
             recipient_email=user.email,
             subject=subject,
-            html_content=html_message,
-            recipient_name=user.full_name,
+            template="verify_email.html",
+            context={
+                "verification_url": verification_url,
+                "expiry_hours": getattr(settings, "EMAIL_VERIFICATION_EXPIRY_HOURS", 24),
+            },
+            recipient_name=user.username or user.email,
+            async_send=False,
         )
 
     @staticmethod

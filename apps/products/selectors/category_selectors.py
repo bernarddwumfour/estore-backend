@@ -4,6 +4,7 @@ No business logic - just queries
 """
 
 from typing import Optional, List, Dict, Tuple
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.products.models import Category
@@ -20,7 +21,7 @@ def get_category_by_id(category_id: str, is_admin: bool = False) -> Optional[Cat
                 is_hidden=False
             )  # Hide hidden categories from customers
         return queryset.get(id=category_id)
-    except (Category.DoesNotExist, ValueError):
+    except (Category.DoesNotExist, ValueError, ValidationError):
         return None
 
 

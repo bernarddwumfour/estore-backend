@@ -12,7 +12,7 @@ from django.conf import settings
 from ..models.user import User
 from ..models.verification_token import VerificationToken
 from ..utils.token_utils import generate_verification_token
-from estore.utils.email_util import send_email
+from estore.utils.email_util import send_templated_email
 from urllib.parse import urlencode
 
 
@@ -115,54 +115,13 @@ class PasswordService:
         """Send password reset email"""
         subject = f"Reset Your Password - {getattr(settings, 'SITE_NAME', 'API')}"
 
-        # Plain text email
-        message_text = f"""Hello {user.username or user.email},
-
-You requested to reset your password. Click the link below to set a new password:
-
-{reset_url}
-
-This link will expire in 1 hour.
-
-If you didn't request this password reset, please ignore this email or contact support if you're concerned.
-
-Best regards,
-{getattr(settings, 'SITE_NAME', 'API')} Team"""
-
-        # HTML email
-        html_message = f"""<!DOCTYPE html>
-<html>
-<body style="font-family: Arial, sans-serif; line-height: 1.6;">
-    <div style="max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333;">Reset Your Password</h2>
-        <p>Hello <strong>{user.username or user.email}</strong>,</p>
-        <p>You requested to reset your password. Click the button below to set a new password:</p>
-        <p>
-            <a href="{reset_url}" 
-               style="background: #4CAF50; color: white; padding: 12px 24px; 
-                      text-decoration: none; border-radius: 5px; display: inline-block;">
-                Reset Password
-            </a>
-        </p>
-        <p>Or copy this link to your browser:<br>
-        <code style="background: #f5f5f5; padding: 8px; border-radius: 3px; 
-                     word-break: break-all; display: block; margin: 10px 0;">
-            {reset_url}
-        </code></p>
-        <p><strong>⚠️ Important:</strong> This link expires in 1 hour.</p>
-        <p>If you didn't request this password reset, please ignore this email.</p>
-        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-        <p>Best regards,<br>
-        <strong>{getattr(settings, 'SITE_NAME', 'API')} Team</strong></p>
-    </div>
-</body>
-</html>"""
-
-        return send_email(
+        return send_templated_email(
             recipient_email=user.email,
             subject=subject,
-            message_text=message_text,
-            html_message=html_message,
+            template="password_reset.html",
+            context={"reset_url": reset_url},
+            recipient_name=user.username or user.email,
+            async_send=False,
         )
 
     @staticmethod
@@ -253,54 +212,13 @@ Best regards,
         ip_address = request.META.get("REMOTE_ADDR") if request else "unknown"
         timestamp = timezone.now().strftime("%Y-%m-%d %H:%M:%S %Z")
 
-        # Plain text email
-        message_text = f"""Hello {user.username or user.email},
-
-Your password has been successfully changed.
-
-Change Details:
-- Time: {timestamp}
-- IP Address: {ip_address}
-
-If you did not make this change, please contact our support team immediately.
-
-Best regards,
-{getattr(settings, 'SITE_NAME', 'API')} Security Team"""
-
-        # HTML email
-        html_message = f"""<!DOCTYPE html>
-<html>
-<body style="font-family: Arial, sans-serif; line-height: 1.6;">
-    <div style="max-width: 600px; margin: 0 auto;">
-        <h2 style="color: #333;">Password Changed Successfully</h2>
-        <p>Hello <strong>{user.username or user.email}</strong>,</p>
-        <p>Your password has been successfully changed.</p>
-        
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p><strong>Change Details:</strong></p>
-            <p><strong>Time:</strong> {timestamp}</p>
-            <p><strong>IP Address:</strong> {ip_address}</p>
-        </div>
-        
-        <div style="background: #fff3cd; border: 1px solid #ffeaa7; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p style="color: #856404; font-weight: bold; margin: 0;">
-                ⚠️ Security Alert: If you did not make this change, please contact our support team immediately.
-            </p>
-        </div>
-        
-        <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;">
-        <p>Best regards,<br>
-        <strong>{getattr(settings, 'SITE_NAME', 'API')} Security Team</strong></p>
-    </div>
-</body>
-</html>"""
-
         try:
-            return send_email(
+            return send_templated_email(
                 recipient_email=user.email,
                 subject=subject,
-                message_text=message_text,
-                html_message=html_message,
+                template="password_changed.html",
+                context={"timestamp": timestamp, "ip_address": ip_address},
+                recipient_name=user.username or user.email,
             )
         except Exception as e:
             logger.error(f"Failed to send password changed email: {str(e)}")

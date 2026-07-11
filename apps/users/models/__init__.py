@@ -1,6 +1,7 @@
 from .user import User, PasswordResetToken
 from .customer import CustomerProfile, StaffProfile
 from .address import Address
+from .affiliate import Affiliate
 from .verification_token import VerificationToken
 
 __all__ = [
@@ -8,6 +9,7 @@ __all__ = [
     "CustomerProfile",
     "StaffProfile",
     "Address",
+    "Affiliate",
     "VerificationToken",
     "PasswordResetToken",
 ]

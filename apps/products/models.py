@@ -404,18 +404,34 @@ class ProductVariant(models.Model):
         return 0 < self.stock <= self.low_stock_threshold
 
     def reduce_stock(self, quantity):
-        """Reduce stock by quantity"""
-        if quantity > self.stock:
+        """Atomically reduce stock, guarding against oversell under concurrency.
+
+        Uses a single conditional UPDATE (WHERE stock >= quantity) so two
+        concurrent checkouts cannot both pass the check and oversell. Raises
+        ValueError if insufficient stock, rolling back the enclosing transaction.
+        """
+        from django.db.models import F
+
+        updated = self.__class__.objects.filter(
+            pk=self.pk, stock__gte=quantity
+        ).update(stock=F("stock") - quantity)
+
+        if not updated:
+            # Reflect the latest value in the error message for the caller.
+            self.refresh_from_db(fields=["stock"])
             raise ValueError(
-                f"Insufficient stock. Available: {self.stock}, Requested: {quantity}"
+                f"Insufficient stock for {self.sku}. "
+                f"Available: {self.stock}, Requested: {quantity}"
             )
-        self.stock -= quantity
-        self.save(update_fields=["stock"])
+
+        self.refresh_from_db(fields=["stock"])
 
     def increase_stock(self, quantity):
-        """Increase stock by quantity"""
-        self.stock += quantity
-        self.save(update_fields=["stock"])
+        """Atomically increase stock by quantity."""
+        from django.db.models import F
+
+        self.__class__.objects.filter(pk=self.pk).update(stock=F("stock") + quantity)
+        self.refresh_from_db(fields=["stock"])
         
     @property
     def gross_profit(self) -> Decimal:

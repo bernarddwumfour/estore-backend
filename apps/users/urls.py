@@ -109,7 +109,10 @@ urlpatterns = [
     # Affiliate Management
     path("/admin/affiliates", views.list_affiliate_users, name="list-affiliate-users"),
     path("/admin/affiliates/<uuid:user_id>/make", views.make_affiliate, name="make-affiliate"),
+    path("/admin/affiliates/make-by-email", views.make_affiliate_by_email, name="make-affiliate-by-email"),
     path("/admin/affiliates/<uuid:user_id>/remove", views.remove_affiliate, name="remove-affiliate"),
+    path("/admin/affiliates/<uuid:user_id>/status", views.toggle_affiliate_status, name="toggle-affiliate-status"),
+    path("/admin/affiliates/<uuid:user_id>/commission", views.update_affiliate_commission, name="update-affiliate-commission"),
     
     # ==================== GUEST CHECKOUT ====================
     path("/guest-checkout", views.guest_checkout, name="guest-checkout"),

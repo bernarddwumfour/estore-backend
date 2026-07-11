@@ -5,9 +5,25 @@ Customer-specific data (separate from auth)
 """
 import uuid
 from datetime import date
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
-from django.core.validators import MaxValueValidator
+
+
+def validate_minimum_age(value):
+    """Customer must be at least 13 years old. A function (not a
+    MaxValueValidator built from date.today()) so the cutoff is evaluated at
+    validation time — a baked-in date changes daily and makes makemigrations
+    demand a new migration every day."""
+    if not value:
+        return
+    today = date.today()
+    try:
+        cutoff = today.replace(year=today.year - 13)
+    except ValueError:  # Feb 29 in a non-leap target year
+        cutoff = today.replace(month=2, day=28, year=today.year - 13)
+    if value > cutoff:
+        raise ValidationError(_("Must be at least 13 years old."))
 
 
 class CustomerProfile(models.Model):
@@ -27,12 +43,7 @@ class CustomerProfile(models.Model):
         _("date of birth"),
         null=True,
         blank=True,
-        validators=[
-            MaxValueValidator(
-                date.today().replace(year=date.today().year - 13),
-                message=_("Must be at least 13 years old.")
-            )
-        ]
+        validators=[validate_minimum_age],
     )
     
     # Communication preferences (simple boolean flags)

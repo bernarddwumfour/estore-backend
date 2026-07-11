@@ -7,7 +7,7 @@ from typing import Optional, List, Dict, Any, Tuple
 from django.db.models import Q, Count, Sum
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from django.utils import timezone
-from apps.promotions.models import Promotion, PromotionItem, PromotionImage
+from apps.promotions.models import Promotion, PromotionItem, PromotionImage, DiscountCode
 
 
 def get_active_promotions(
@@ -183,3 +183,153 @@ def get_promotion_item_by_variant(promotion_id: str, variant_id: str) -> Optiona
         return PromotionItem.objects.get(promotion_id=promotion_id, variant_id=variant_id)
     except PromotionItem.DoesNotExist:
         return None
+
+
+def get_admin_discount_codes(
+    page: int = 1,
+    limit: int = 20,
+    search: str = None,
+    is_active: bool = None,
+    affiliate_only: bool = None,
+    sort_by: str = "created_at",
+    sort_order: str = "desc",
+) -> Tuple[List[DiscountCode], int, Dict]:
+    queryset = DiscountCode.objects.select_related(
+        "affiliate",
+        "affiliate__user",
+        "created_by",
+    )
+
+    if search:
+        queryset = queryset.filter(
+            Q(code__icontains=search) |
+            Q(name__icontains=search) |
+            Q(affiliate__user__email__icontains=search)
+        )
+
+    if is_active is not None:
+        queryset = queryset.filter(is_active=is_active)
+
+    if affiliate_only is not None:
+        queryset = queryset.filter(affiliate__isnull=not affiliate_only)
+
+    sort_mapping = {
+        "created_at": "created_at",
+        "code": "code",
+        "value": "value",
+        "min_subtotal": "min_subtotal",
+        "is_active": "is_active",
+    }
+    sort_field = sort_mapping.get(sort_by, "created_at")
+    if sort_order == "desc":
+        sort_field = f"-{sort_field}"
+    queryset = queryset.order_by(sort_field)
+
+    total = queryset.count()
+    paginator = Paginator(queryset, limit)
+    try:
+        discount_codes_page = paginator.page(page)
+    except PageNotAnInteger:
+        discount_codes_page = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        discount_codes_page = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    pagination_meta = {
+        "current_page": page,
+        "per_page": limit,
+        "total": total,
+        "total_pages": paginator.num_pages,
+        "has_next": discount_codes_page.has_next(),
+        "has_previous": discount_codes_page.has_previous(),
+        "next_page": page + 1 if discount_codes_page.has_next() else None,
+        "previous_page": page - 1 if discount_codes_page.has_previous() else None,
+    }
+
+    return list(discount_codes_page), total, pagination_meta
+
+
+def get_discount_code_by_id(code_id: str) -> Optional[DiscountCode]:
+    try:
+        return DiscountCode.objects.select_related(
+            "affiliate",
+            "affiliate__user",
+            "created_by",
+        ).get(id=code_id)
+    except DiscountCode.DoesNotExist:
+        return None
+
+
+def get_affiliate_commissions(
+    affiliate,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+    page: int = 1,
+    limit: int = 20,
+) -> Tuple[List, int, Dict]:
+    """Commissions (with their orders) belonging to an affiliate, optionally
+    filtered to a given month/year (on the order's creation date)."""
+    from apps.promotions.models import AffiliateCommission
+
+    queryset = AffiliateCommission.objects.filter(
+        affiliate=affiliate,
+    ).select_related("order", "discount_code").order_by("-created_at")
+
+    if year:
+        queryset = queryset.filter(order__created_at__year=year)
+    if month:
+        queryset = queryset.filter(order__created_at__month=month)
+
+    total = queryset.count()
+    paginator = Paginator(queryset, limit)
+    try:
+        commissions_page = paginator.page(page)
+    except PageNotAnInteger:
+        commissions_page = paginator.page(1)
+        page = 1
+    except EmptyPage:
+        commissions_page = paginator.page(paginator.num_pages)
+        page = paginator.num_pages
+
+    pagination_meta = {
+        "current_page": page,
+        "per_page": limit,
+        "total": total,
+        "total_pages": paginator.num_pages,
+        "has_next": commissions_page.has_next(),
+        "has_previous": commissions_page.has_previous(),
+        "next_page": page + 1 if commissions_page.has_next() else None,
+        "previous_page": page - 1 if commissions_page.has_previous() else None,
+    }
+
+    return list(commissions_page), total, pagination_meta
+
+
+def get_affiliate_commission_summary(
+    affiliate,
+    year: Optional[int] = None,
+    month: Optional[int] = None,
+) -> Dict:
+    """Aggregate commission figures for an affiliate over an optional period."""
+    from apps.promotions.models import AffiliateCommission
+
+    queryset = AffiliateCommission.objects.filter(affiliate=affiliate)
+    if year:
+        queryset = queryset.filter(order__created_at__year=year)
+    if month:
+        queryset = queryset.filter(order__created_at__month=month)
+
+    aggregates = queryset.aggregate(
+        earned=Sum("commission_amount", filter=Q(status=AffiliateCommission.STATUS_ACCRUED)),
+        pending=Sum("commission_amount", filter=Q(status=AffiliateCommission.STATUS_PENDING)),
+        reversed=Sum("commission_amount", filter=Q(status=AffiliateCommission.STATUS_REVERSED)),
+        order_total=Sum("order__total"),
+    )
+    return {
+        "order_count": queryset.count(),
+        "order_total": float(aggregates["order_total"] or 0),
+        "earned": float(aggregates["earned"] or 0),
+        "pending": float(aggregates["pending"] or 0),
+        "reversed": float(aggregates["reversed"] or 0),
+    }

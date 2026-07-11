@@ -294,11 +294,12 @@ class AuthService:
                     "role": user.role,
                     "email_verified": user.email_verified,
                     "is_active": user.is_active,
+                    "is_affiliate": hasattr(user, "affiliate_profile"),
                 },
                 "tokens": {
                     "access_token": access_token,
                     "refresh_token": refresh_token,
-                    
+
                 },
                 "wishlists": wishlist_variant_ids
             }

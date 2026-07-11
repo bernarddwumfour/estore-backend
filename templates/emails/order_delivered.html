@@ -1,0 +1,8 @@
+{% extends "emails/base.html" %}
+
+{% block heading %}Your Order Has Been Delivered &#9989;{% endblock %}
+
+{% block content %}
+<p>Your order <strong>{{ order.order_number }}</strong> has been delivered.</p>
+<p>We hope you love it! If anything isn't right, just reply to this email and we'll help.</p>
+{% endblock %}

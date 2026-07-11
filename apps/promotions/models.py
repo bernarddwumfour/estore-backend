@@ -259,3 +259,174 @@ class PromotionImage(models.Model):
     
     def __str__(self):
         return f"Image for {self.promotion.name}"
+
+
+class DiscountCode(models.Model):
+    """Checkout discount codes, including affiliate-linked referral codes."""
+
+    TYPE_PERCENTAGE = "percentage"
+    TYPE_FIXED = "fixed"
+
+    TYPE_CHOICES = [
+        (TYPE_PERCENTAGE, "Percentage"),
+        (TYPE_FIXED, "Fixed Amount"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    code = models.CharField(_("code"), max_length=50, unique=True, db_index=True)
+    name = models.CharField(_("name"), max_length=120)
+    description = models.TextField(_("description"), blank=True)
+    discount_type = models.CharField(
+        _("discount type"),
+        max_length=20,
+        choices=TYPE_CHOICES,
+        default=TYPE_PERCENTAGE,
+    )
+    value = models.DecimalField(
+        _("value"),
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+    min_subtotal = models.DecimalField(
+        _("minimum subtotal"),
+        max_digits=10,
+        decimal_places=2,
+        default=0.00,
+        validators=[MinValueValidator(0)],
+    )
+    max_discount_amount = models.DecimalField(
+        _("maximum discount amount"),
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        validators=[MinValueValidator(0)],
+    )
+    is_active = models.BooleanField(_("active"), default=True, db_index=True)
+    starts_at = models.DateTimeField(_("starts at"), null=True, blank=True, db_index=True)
+    ends_at = models.DateTimeField(_("ends at"), null=True, blank=True, db_index=True)
+    affiliate = models.ForeignKey(
+        "users.Affiliate",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="discount_codes",
+    )
+    created_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_discount_codes",
+    )
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        db_table = "discount_codes"
+        verbose_name = _("discount code")
+        verbose_name_plural = _("discount codes")
+        ordering = ["code"]
+        indexes = [
+            models.Index(fields=["code"]),
+            models.Index(fields=["is_active", "starts_at", "ends_at"]),
+            models.Index(fields=["affiliate"]),
+        ]
+
+    def __str__(self):
+        return self.code
+
+    def save(self, *args, **kwargs):
+        self.code = (self.code or "").strip().upper()
+        super().save(*args, **kwargs)
+
+    @property
+    def is_currently_active(self) -> bool:
+        if not self.is_active:
+            return False
+
+        now = timezone.now()
+        if self.starts_at and self.starts_at > now:
+            return False
+        if self.ends_at and self.ends_at < now:
+            return False
+        if self.affiliate and (not self.affiliate.is_active or not self.affiliate.is_approved):
+            return False
+        return True
+
+
+class AffiliateCommission(models.Model):
+    """Commission record for affiliate-attributed orders."""
+
+    STATUS_PENDING = "pending"
+    STATUS_ACCRUED = "accrued"
+    STATUS_REVERSED = "reversed"
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, "Pending"),
+        (STATUS_ACCRUED, "Accrued"),
+        (STATUS_REVERSED, "Reversed"),
+    ]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    affiliate = models.ForeignKey(
+        "users.Affiliate",
+        on_delete=models.CASCADE,
+        related_name="commissions",
+    )
+    order = models.OneToOneField(
+        "orders.Order",
+        on_delete=models.CASCADE,
+        related_name="affiliate_commission",
+    )
+    discount_code = models.ForeignKey(
+        DiscountCode,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="commissions",
+    )
+    commission_rate = models.DecimalField(
+        _("commission rate"),
+        max_digits=5,
+        decimal_places=2,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+    )
+    commissionable_amount = models.DecimalField(
+        _("commissionable amount"),
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+    commission_amount = models.DecimalField(
+        _("commission amount"),
+        max_digits=10,
+        decimal_places=2,
+        validators=[MinValueValidator(0)],
+    )
+    status = models.CharField(
+        _("status"),
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_PENDING,
+        db_index=True,
+    )
+    accrued_at = models.DateTimeField(_("accrued at"), null=True, blank=True)
+    reversed_at = models.DateTimeField(_("reversed at"), null=True, blank=True)
+    notes = models.TextField(_("notes"), blank=True)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        db_table = "affiliate_commissions"
+        verbose_name = _("affiliate commission")
+        verbose_name_plural = _("affiliate commissions")
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["affiliate", "status"]),
+            models.Index(fields=["order"]),
+        ]
+
+    def __str__(self):
+        return f"{self.affiliate.user.email} - {self.order.order_number}"

@@ -85,16 +85,18 @@ def generate_jwt_token(user, token_type: str = "access", expires_in: int = None)
             "type": token_type,
             "exp": datetime.utcnow() + timedelta(seconds=expires_in),
             "iat": datetime.utcnow(),
-            "jti": str(uuid.uuid4()),  # JWT ID for tracking
+            "jti": str(uuid.uuid4()),  # JWT ID for revocation tracking
             "role": user.role,
+            "iss": settings.JWT_ISSUER,
+            "aud": settings.JWT_AUDIENCE,
         }
 
         # Add additional claims based on token type
         if token_type == "verification":
             payload["purpose"] = "email_verification"
 
-        # Generate JWT token
-        token = jwt.encode(payload, settings.SECRET_KEY, algorithm="HS256")
+        # Generate JWT token (dedicated JWT secret, falls back to SECRET_KEY)
+        token = jwt.encode(payload, settings.JWT_SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
 
         return token
 
@@ -113,7 +115,19 @@ def validate_jwt_token(token: str) -> Tuple[bool, Optional[Dict], Optional[str]]
         Tuple[bool, Optional[Dict], Optional[str]]: (is_valid, payload, error_message)
     """
     try:
-        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=["HS256"])
+        payload = jwt.decode(
+            token,
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
+            options={"require": ["exp", "iat", "jti", "aud", "iss"]},
+        )
+
+        # Reject tokens that have been explicitly revoked (logout / rotation).
+        if is_token_revoked(payload.get("jti")):
+            return False, "Token has been revoked"
+
         return True, payload
 
     except jwt.ExpiredSignatureError:
@@ -122,6 +136,40 @@ def validate_jwt_token(token: str) -> Tuple[bool, Optional[Dict], Optional[str]]
         return False, f"Invalid token: {str(e)}"
     except Exception as e:
         return False, f"Token validation failed: {str(e)}"
+
+
+def _revocation_cache_key(jti: str) -> str:
+    return f"jwt_revoked_{jti}"
+
+
+def is_token_revoked(jti: Optional[str]) -> bool:
+    """Return True if a token's jti is present in the revocation deny-list."""
+    if not jti:
+        return True  # No jti => cannot be trusted
+    from django.core.cache import cache
+
+    return cache.get(_revocation_cache_key(jti)) is not None
+
+
+def revoke_token(payload: Dict[str, Any]) -> None:
+    """Add a token's jti to the revocation deny-list until it would expire.
+
+    Stores the jti in the shared cache (Redis in production) with a TTL equal to
+    the token's remaining lifetime, so the deny-list never grows unbounded.
+    """
+    from django.core.cache import cache
+
+    jti = payload.get("jti")
+    if not jti:
+        return
+
+    exp = payload.get("exp")
+    now = int(datetime.utcnow().timestamp())
+    ttl = int(exp) - now if exp else 0
+
+    # Only store while the token could otherwise still be valid.
+    if ttl > 0:
+        cache.set(_revocation_cache_key(jti), True, timeout=ttl)
 
 
 def generate_numeric_code(length: int = 6) -> str:
@@ -298,11 +346,13 @@ def is_token_expired(token: str) -> bool:
         bool: True if expired
     """
     try:
-        # Decode without verification to check expiry
+        # Decode without expiry check (signature still verified) to inspect expiry
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY,
-            algorithms=["HS256"],
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            audience=settings.JWT_AUDIENCE,
+            issuer=settings.JWT_ISSUER,
             options={"verify_exp": False},
         )
 
@@ -331,9 +381,13 @@ def get_token_payload(token: str) -> Optional[Dict]:
     try:
         payload = jwt.decode(
             token,
-            settings.SECRET_KEY,
-            algorithms=["HS256"],
-            options={"verify_exp": False, "verify_signature": False},
+            settings.JWT_SECRET_KEY,
+            algorithms=[settings.JWT_ALGORITHM],
+            options={
+                "verify_exp": False,
+                "verify_signature": False,
+                "verify_aud": False,
+            },
         )
         return payload
     except Exception:

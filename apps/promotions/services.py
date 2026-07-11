@@ -5,17 +5,26 @@ Promotion Service - Business logic for promotions
 import logging
 import time
 from typing import Dict, Any, Optional, List, Tuple
+from decimal import Decimal, ROUND_HALF_UP
+from django.conf import settings
 from django.db import transaction
+from django.db import IntegrityError
 from django.utils.text import slugify
 from django.utils import timezone
 from django.db.models import Q, F, Sum
 
-from apps.promotions.models import Promotion, PromotionItem, PromotionImage
+from apps.promotions.models import (
+    Promotion,
+    PromotionItem,
+    PromotionImage,
+    DiscountCode,
+    AffiliateCommission,
+)
 from apps.products.selectors import get_variant_by_id, get_product_by_id
 from apps.products.models import ProductVariant
 from apps.users.models import User
+from apps.users.models.affiliate import Affiliate
 from apps.common.logging import log_action, LogSeverity, get_user_info
-from decimal import Decimal
 
 logger = logging.getLogger(__name__)
 APP_NAME = "promotions"
@@ -50,6 +59,17 @@ class PromotionService:
         )
         
         try:
+            # Resolve every variant up-front so a bad variant_id fails BEFORE we
+            # write anything. A caught exception inside @transaction.atomic does
+            # NOT roll back, so a partial create would otherwise commit.
+            items_data = data.get("items", [])
+            resolved_items = []
+            for item_data in items_data:
+                variant = get_variant_by_id(item_data["variant_id"])
+                if not variant:
+                    return None, {"items": f"Variant not found: {item_data['variant_id']}"}
+                resolved_items.append((variant, item_data))
+
             # Generate unique slug
             base_slug = slugify(data["name"])
             slug = base_slug
@@ -57,7 +77,7 @@ class PromotionService:
             while Promotion.objects.filter(slug=slug).exists():
                 slug = f"{base_slug}-{counter}"
                 counter += 1
-            
+
             # Make datetimes timezone-aware
             starts_at = data["starts_at"]
             ends_at = data.get("ends_at")
@@ -90,13 +110,8 @@ class PromotionService:
                 created_by=user,
             )
             
-            # Create promotion items
-            items_data = data.get("items", [])
-            for item_data in items_data:
-                variant = get_variant_by_id(item_data["variant_id"])
-                if not variant:
-                    raise ValueError(f"Variant not found: {item_data['variant_id']}")
-                
+            # Create promotion items (variants already resolved above)
+            for variant, item_data in resolved_items:
                 PromotionItem.objects.create(
                     promotion=promotion,
                     variant=variant,
@@ -143,19 +158,12 @@ class PromotionService:
             return promotion, None
             
         except Exception as e:
+            # Caught exceptions inside @transaction.atomic do not auto-rollback;
+            # flag it so the partial write is discarded on block exit.
+            transaction.set_rollback(True)
             duration_ms = (time.time() - start_time) * 1000
-            log_action(
-                logger=logger,
-                severity=LogSeverity.ERROR,
-                action=action,
-                description=f"Failed to create promotion: {str(e)}",
-                status_code=500,
-                user=user,
-                request=None,
-                app_name=APP_NAME,
-                extra={"error": str(e), "duration_ms": round(duration_ms, 2)}
-            )
-            return None, {"general": f"Failed to create promotion: {str(e)}"}
+            logger.exception("Failed to create promotion")
+            return None, {"general": "Failed to create promotion. Please try again."}
         
         
         
@@ -192,7 +200,10 @@ class PromotionService:
             old_status = promotion.status
             promotion.status = Promotion.STATUS_ACTIVE
             promotion.save()
-            
+
+            from apps.social.services import SocialPostService
+            SocialPostService.queue_for_approval("promotion", promotion)
+
             duration_ms = (time.time() - start_time) * 1000
             log_action(
                 logger=logger,
@@ -605,7 +616,18 @@ class PromotionService:
                     extra={"promotion_id": promotion_id, "status": promotion.status}
                 )
                 return None, {"status": f"Cannot edit {promotion.status} promotion. Only draft or paused promotions can be edited."}
-            
+
+            # Resolve any new variants BEFORE mutating the promotion, so an
+            # invalid variant_id fails cleanly without committing a partial edit.
+            resolved_items = None
+            if "items" in data:
+                resolved_items = []
+                for item_data in data["items"]:
+                    variant = get_variant_by_id(item_data["variant_id"])
+                    if not variant:
+                        return None, {"items": f"Variant not found: {item_data['variant_id']}"}
+                    resolved_items.append((variant, item_data))
+
             # Update slug if name changed
             if "name" in data and data["name"] != promotion.name:
                 base_slug = slugify(data["name"])
@@ -651,17 +673,11 @@ class PromotionService:
             
             promotion.save()
             
-            # Update items - remove existing and add new
-            if "items" in data:
-                # Delete existing items
+            # Update items - remove existing and add new (variants pre-resolved)
+            if resolved_items is not None:
+                # Delete existing items, then create the new set
                 promotion.items.all().delete()
-                
-                # Create new items
-                for item_data in data["items"]:
-                    variant = get_variant_by_id(item_data["variant_id"])
-                    if not variant:
-                        raise ValueError(f"Variant not found: {item_data['variant_id']}")
-                    
+                for variant, item_data in resolved_items:
                     PromotionItem.objects.create(
                         promotion=promotion,
                         variant=variant,
@@ -726,15 +742,452 @@ class PromotionService:
             )
             return None, {"promotion": "Promotion not found"}
         except Exception as e:
-            duration_ms = (time.time() - start_time) * 1000
-            log_action(
-                logger=logger,
-                severity=LogSeverity.ERROR,
-                action=action,
-                description=f"Failed to update promotion: {str(e)}",
-                status_code=500,
-                user=user,
-                app_name=APP_NAME,
-                extra={"promotion_id": promotion_id, "error": str(e), "duration_ms": round(duration_ms, 2)}
+            # See create_promotion: discard any partial write on unexpected error.
+            transaction.set_rollback(True)
+            logger.exception("Failed to update promotion")
+            return None, {"general": "Failed to update promotion. Please try again."}
+
+
+class DiscountCodeService:
+    """Validation and commission lifecycle for checkout discount codes."""
+
+    DEFAULT_AFFILIATE_DISCOUNT_TYPE = getattr(
+        settings, "AFFILIATE_CODE_DISCOUNT_TYPE", DiscountCode.TYPE_PERCENTAGE
+    )
+    DEFAULT_AFFILIATE_DISCOUNT_VALUE = Decimal(
+        str(getattr(settings, "AFFILIATE_CODE_DISCOUNT_VALUE", "5.00"))
+    )
+
+    @staticmethod
+    def _money(value: Decimal) -> Decimal:
+        return Decimal(str(value)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+
+    @classmethod
+    @transaction.atomic
+    def ensure_affiliate_discount_code(
+        cls,
+        affiliate: Affiliate,
+        created_by: User = None,
+    ) -> DiscountCode:
+        """Legacy helper for generating an affiliate-linked discount code."""
+        defaults = {
+            "code": "",
+            "name": f"{affiliate.user.full_name or affiliate.user.email} referral code",
+            "description": "Affiliate referral discount code",
+            "discount_type": cls.DEFAULT_AFFILIATE_DISCOUNT_TYPE,
+            "value": cls.DEFAULT_AFFILIATE_DISCOUNT_VALUE,
+            "affiliate": affiliate,
+            "created_by": created_by,
+            "is_active": True,
+        }
+        base_code = f"AFF-{affiliate.referral_code}"
+        code = base_code
+        counter = 1
+        while DiscountCode.objects.exclude(affiliate=affiliate).filter(code=code).exists():
+            counter += 1
+            code = f"{base_code}-{counter}"
+        defaults["code"] = code
+
+        discount_code = DiscountCode.objects.filter(affiliate=affiliate).order_by("created_at").first()
+        created = False
+        if discount_code is None:
+            discount_code = DiscountCode.objects.create(**defaults)
+            created = True
+
+        updated_fields = []
+        if discount_code.affiliate_id != affiliate.id:
+            discount_code.affiliate = affiliate
+            updated_fields.append("affiliate")
+        if discount_code.code != code:
+            discount_code.code = code
+            updated_fields.append("code")
+        if discount_code.name != defaults["name"]:
+            discount_code.name = defaults["name"]
+            updated_fields.append("name")
+        if created_by and discount_code.created_by_id is None:
+            discount_code.created_by = created_by
+            updated_fields.append("created_by")
+        if not discount_code.is_active and affiliate.is_active and affiliate.is_approved:
+            discount_code.is_active = True
+            updated_fields.append("is_active")
+
+        if updated_fields:
+            discount_code.save(update_fields=updated_fields)
+
+        return discount_code
+
+    @classmethod
+    def _get_discount_code(
+        cls,
+        code: str,
+    ) -> Tuple[Optional[DiscountCode], Optional[Affiliate], bool]:
+        normalized_code = (code or "").strip().upper()
+        if not normalized_code:
+            return None, None, False
+
+        discount_code = (
+            DiscountCode.objects.select_related("affiliate", "affiliate__user")
+            .filter(code=normalized_code)
+            .first()
+        )
+        if discount_code:
+            return discount_code, discount_code.affiliate, False
+
+        affiliate = (
+            Affiliate.objects.select_related("user")
+            .prefetch_related("discount_codes")
+            .filter(referral_code=normalized_code)
+            .first()
+        )
+        if not affiliate:
+            return None, None, False
+
+        discount_code = affiliate.discount_codes.order_by("created_at").first()
+        if not discount_code:
+            return None, affiliate, True
+
+        return discount_code, affiliate, True
+
+    @classmethod
+    def validate_discount_code(
+        cls,
+        code: str,
+        subtotal: Decimal,
+        items: Optional[List[Dict[str, Any]]] = None,
+    ) -> Tuple[Optional[DiscountCode], Optional[Dict[str, Any]], Optional[Dict[str, str]]]:
+        """Validate a code and compute the discount/commission snapshots.
+
+        `items` (order_items_data dicts with variant/quantity/unit_price) is
+        required to compute profit-based commissions; without it the
+        sale-amount basis is used as a fallback.
+        """
+        normalized_code = (code or "").strip().upper()
+        subtotal = cls._money(subtotal)
+
+        if not normalized_code:
+            return None, None, {"discount_code": "Discount code is required"}
+
+        discount_code, resolved_affiliate, resolved_from_referral_code = cls._get_discount_code(
+            normalized_code
+        )
+        if not discount_code:
+            if resolved_from_referral_code and resolved_affiliate:
+                return None, None, {
+                    "discount_code": "Affiliate reference code is not linked to a discount code"
+                }
+            return None, None, {"discount_code": "Discount code not found"}
+
+        if not discount_code.is_currently_active:
+            return None, None, {"discount_code": "Discount code is not active"}
+
+        if subtotal < discount_code.min_subtotal:
+            return None, None, {
+                "discount_code": (
+                    f"This code requires a minimum subtotal of {discount_code.min_subtotal}"
+                )
+            }
+
+        if discount_code.discount_type == DiscountCode.TYPE_PERCENTAGE:
+            discount_amount = subtotal * (discount_code.value / Decimal("100"))
+        else:
+            discount_amount = discount_code.value
+
+        if discount_code.max_discount_amount is not None:
+            discount_amount = min(discount_amount, discount_code.max_discount_amount)
+
+        discount_amount = min(cls._money(discount_amount), subtotal)
+
+        if discount_amount <= Decimal("0.00"):
+            return None, None, {"discount_code": "Discount code does not apply to this order"}
+
+        affiliate = resolved_affiliate or discount_code.affiliate
+        commissionable_amount = subtotal
+        commission_amount = Decimal("0.00")
+        commission_rate = Decimal("0.00")
+
+        if affiliate:
+            from apps.users.models import Affiliate
+
+            if affiliate.commission_basis == Affiliate.BASIS_PROFIT and items:
+                # Profit after discount: what the store actually made on the
+                # order once the affiliate's discount came out of the margin.
+                gross_margin = sum(
+                    (
+                        (item["unit_price"] - item["variant"].cost_price)
+                        * Decimal(str(item["quantity"]))
+                        for item in items
+                        if item.get("variant")
+                    ),
+                    Decimal("0.00"),
+                )
+                commissionable_amount = gross_margin - discount_amount
+            else:
+                commission_base = getattr(
+                    settings,
+                    "AFFILIATE_COMMISSION_BASE",
+                    "discounted_subtotal",
+                )
+                if commission_base == "original_subtotal":
+                    commissionable_amount = subtotal
+                else:
+                    commissionable_amount = subtotal - discount_amount
+
+            commissionable_amount = max(cls._money(commissionable_amount), Decimal("0.00"))
+            commission_rate = Decimal(str(affiliate.commission_rate))
+            commission_amount = cls._money(
+                commissionable_amount * (commission_rate / Decimal("100"))
             )
-            return None, {"general": f"Failed to update promotion: {str(e)}"}
+
+        details = {
+            "entered_code": normalized_code,
+            "code": discount_code.code,
+            "name": discount_code.name,
+            "discount_type": discount_code.discount_type,
+            "discount_value": float(discount_code.value),
+            "discount_amount": discount_amount,
+            "subtotal_after_discount": cls._money(subtotal - discount_amount),
+            "affiliate_id": str(affiliate.id) if affiliate else None,
+            "is_affiliate_code": bool(affiliate),
+            "resolved_from_referral_code": resolved_from_referral_code,
+            "affiliate_referral_code": affiliate.referral_code if affiliate else None,
+            "commission_rate": commission_rate,
+            "commissionable_amount": commissionable_amount,
+            "commission_amount": commission_amount,
+        }
+        return discount_code, details, None
+
+    @classmethod
+    @transaction.atomic
+    def register_order_discount(
+        cls,
+        order,
+        discount_code: Optional[DiscountCode],
+        discount_details: Optional[Dict[str, Any]],
+    ) -> None:
+        """Persist discount/affiliate attribution and commission records."""
+        if not discount_code or not discount_details:
+            return
+
+        order.discount_code = discount_code
+        order.discount_code_text = discount_code.code
+        order.entered_discount_code_text = discount_details.get("entered_code", discount_code.code)
+        order.affiliate = discount_code.affiliate
+        order.affiliate_commission_amount = discount_details["commission_amount"]
+        order.save(
+            update_fields=[
+                "discount_code",
+                "discount_code_text",
+                "entered_discount_code_text",
+                "affiliate",
+                "affiliate_commission_amount",
+                "updated_at",
+            ]
+        )
+
+        if not discount_code.affiliate or discount_details["commission_amount"] <= Decimal("0.00"):
+            return
+
+        AffiliateCommission.objects.update_or_create(
+            order=order,
+            defaults={
+                "affiliate": discount_code.affiliate,
+                "discount_code": discount_code,
+                "commission_rate": discount_details["commission_rate"],
+                "commissionable_amount": discount_details["commissionable_amount"],
+                "commission_amount": discount_details["commission_amount"],
+                "status": AffiliateCommission.STATUS_PENDING,
+            },
+        )
+
+    @classmethod
+    def _order_is_commission_eligible(cls, order) -> bool:
+        if not order.affiliate_id or order.affiliate_commission_amount <= Decimal("0.00"):
+            return False
+
+        if order.payment_method in ("pod", "cash_on_delivery"):
+            return order.status in (order.STATUS_DELIVERED, order.STATUS_COMPLETED)
+
+        return order.payment_status == order.PAYMENT_PAID
+
+    @classmethod
+    def _order_should_reverse_commission(cls, order) -> bool:
+        return (
+            order.status in {order.STATUS_CANCELLED, order.STATUS_REFUNDED}
+            or order.payment_status in {order.PAYMENT_FAILED, order.PAYMENT_REFUNDED}
+        )
+
+    @classmethod
+    def _append_commission_note(cls, commission_pk, reason: str) -> None:
+        if not reason:
+            return
+        commission = AffiliateCommission.objects.get(pk=commission_pk)
+        commission.notes = f"{commission.notes}\n{reason}".strip()
+        commission.save(update_fields=["notes", "updated_at"])
+
+    @classmethod
+    @transaction.atomic
+    def sync_order_commission(cls, order, reason: str = "") -> None:
+        """Move an order commission between pending, accrued, and reversed.
+
+        Concurrency-safe: the payment webhook and the browser payment callback
+        routinely fire near-simultaneously, so the status flips below are
+        conditional UPDATEs — only the caller whose UPDATE actually matched
+        touches the affiliate's earnings. Row locks narrow the race window on
+        PostgreSQL; on SQLite (tests) select_for_update is a no-op and the
+        conditional UPDATEs alone provide the guarantee.
+        """
+        if not order.affiliate_id:
+            return
+
+        commission = (
+            AffiliateCommission.objects.select_for_update()
+            .select_related("affiliate")
+            .filter(order=order)
+            .first()
+        )
+        if commission is None:
+            return
+        affiliate = Affiliate.objects.select_for_update().get(pk=commission.affiliate_id)
+
+        now = timezone.now()
+
+        if cls._order_should_reverse_commission(order):
+            # Reverse an accrued commission (and claw back the earnings)…
+            updated = AffiliateCommission.objects.filter(
+                pk=commission.pk, status=AffiliateCommission.STATUS_ACCRUED
+            ).update(status=AffiliateCommission.STATUS_REVERSED, reversed_at=now, updated_at=now)
+            if updated:
+                affiliate.reverse_earnings(commission.commission_amount)
+                cls._append_commission_note(commission.pk, reason)
+                return
+            # …or flip a still-pending one (no earnings were ever added).
+            updated = AffiliateCommission.objects.filter(
+                pk=commission.pk, status=AffiliateCommission.STATUS_PENDING
+            ).update(status=AffiliateCommission.STATUS_REVERSED, reversed_at=now, updated_at=now)
+            if updated:
+                cls._append_commission_note(commission.pk, reason)
+            return
+
+        if cls._order_is_commission_eligible(order):
+            # PENDING → ACCRUED, and also REVERSED → ACCRUED: a commission
+            # reversed on a failed payment must recover when the customer
+            # retries and pays (this branch is unreachable while the order is
+            # cancelled/refunded/failed).
+            updated = AffiliateCommission.objects.filter(
+                pk=commission.pk,
+                status__in=[
+                    AffiliateCommission.STATUS_PENDING,
+                    AffiliateCommission.STATUS_REVERSED,
+                ],
+            ).update(
+                status=AffiliateCommission.STATUS_ACCRUED,
+                accrued_at=now,
+                reversed_at=None,
+                updated_at=now,
+            )
+            if updated:
+                affiliate.add_earnings(commission.commission_amount)
+                cls._append_commission_note(commission.pk, reason)
+
+    @classmethod
+    @transaction.atomic
+    def create_discount_code(cls, data: Dict[str, Any], user: User) -> Tuple[Optional[DiscountCode], Optional[Dict]]:
+        try:
+            if DiscountCode.objects.filter(code=data["code"]).exists():
+                return None, {"code": "Discount code already exists"}
+            if Affiliate.objects.filter(referral_code=data["code"]).exists():
+                return None, {"code": "Code is already used as an affiliate reference"}
+
+            discount_code = DiscountCode.objects.create(
+                code=data["code"],
+                name=data["name"],
+                description=data.get("description", ""),
+                discount_type=data["discount_type"],
+                value=data["value"],
+                min_subtotal=data.get("min_subtotal", Decimal("0.00")),
+                max_discount_amount=data.get("max_discount_amount"),
+                starts_at=data.get("starts_at"),
+                ends_at=data.get("ends_at"),
+                is_active=data.get("is_active", True),
+                created_by=user,
+            )
+            return discount_code, None
+        except Exception as e:
+            transaction.set_rollback(True)
+            logger.error(f"Create discount code error: {str(e)}")
+            return None, {"general": "Failed to create discount code"}
+
+    @classmethod
+    @transaction.atomic
+    def update_discount_code(
+        cls,
+        discount_code: DiscountCode,
+        data: Dict[str, Any],
+    ) -> Tuple[Optional[DiscountCode], Optional[Dict]]:
+        try:
+            if discount_code.affiliate_id and "code" in data and data["code"] != discount_code.code:
+                return None, {"code": "Affiliate-linked code cannot be renamed"}
+            if "code" in data and data["code"] != discount_code.code:
+                if DiscountCode.objects.exclude(id=discount_code.id).filter(code=data["code"]).exists():
+                    return None, {"code": "Discount code already exists"}
+                if Affiliate.objects.filter(referral_code=data["code"]).exists():
+                    return None, {"code": "Code is already used as an affiliate reference"}
+
+            for field in (
+                "code",
+                "name",
+                "description",
+                "discount_type",
+                "value",
+                "min_subtotal",
+                "max_discount_amount",
+                "starts_at",
+                "ends_at",
+                "is_active",
+            ):
+                if field in data:
+                    setattr(discount_code, field, data[field])
+
+            discount_code.save()
+            return discount_code, None
+        except Exception as e:
+            transaction.set_rollback(True)
+            logger.error(f"Update discount code error: {str(e)}")
+            return None, {"general": "Failed to update discount code"}
+
+    @classmethod
+    @transaction.atomic
+    def assign_discount_code_to_affiliate(
+        cls,
+        discount_code: DiscountCode,
+        affiliate: Affiliate,
+    ) -> Tuple[Optional[DiscountCode], Optional[Dict]]:
+        try:
+            if discount_code.affiliate_id and discount_code.affiliate_id != affiliate.id:
+                return None, {"discount_code_id": "Discount code is already assigned to another affiliate"}
+
+            discount_code.affiliate = affiliate
+            if affiliate.is_active and affiliate.is_approved:
+                discount_code.is_active = True
+            discount_code.save(update_fields=["affiliate", "is_active", "updated_at"])
+            return discount_code, None
+        except Exception as e:
+            transaction.set_rollback(True)
+            logger.error(f"Assign discount code to affiliate error: {str(e)}")
+            return None, {"general": "Failed to assign discount code"}
+
+    @classmethod
+    @transaction.atomic
+    def toggle_discount_code_status(
+        cls,
+        discount_code: DiscountCode,
+        is_active: bool,
+    ) -> Tuple[Optional[DiscountCode], Optional[Dict]]:
+        try:
+            discount_code.is_active = is_active
+            discount_code.save(update_fields=["is_active", "updated_at"])
+            return discount_code, None
+        except Exception as e:
+            transaction.set_rollback(True)
+            logger.error(f"Toggle discount code status error: {str(e)}")
+            return None, {"general": "Failed to update discount code status"}

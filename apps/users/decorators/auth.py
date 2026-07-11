@@ -5,7 +5,9 @@ Authentication and authorization decorators for views
 """
 
 import json
+from io import BytesIO
 from functools import wraps
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.views.decorators.csrf import csrf_exempt
 
 from apps.users.utils.token_utils import validate_jwt_token
@@ -188,9 +190,22 @@ def multipart_request_allowed(view_func):
 
             # Handle multipart
             elif content_type.startswith("multipart/form-data"):
-                # Parse form data
-                request.json_data = request.POST.dict()
-                request.files_data = request.FILES
+                try:
+                    if request.method == "POST":
+                        form_data = request.POST
+                        files_data = request.FILES
+                    else:
+                        form_data, files_data = MultiPartParser(
+                            request.META,
+                            BytesIO(request.body),
+                            request.upload_handlers,
+                            request.encoding,
+                        ).parse()
+                except MultiPartParserError:
+                    return APIResponse.bad_request("Invalid multipart form data")
+
+                request.json_data = form_data.dict()
+                request.files_data = files_data
 
                 # Auto-parse JSON strings in form data
                 for key, value in request.json_data.items():
@@ -207,21 +222,3 @@ def multipart_request_allowed(view_func):
         return view_func(request, *args, **kwargs)
 
     return wrapper
-
-
-def rate_limit(key_func=None, rate="100/hour", method=None):
-    """
-    Basic rate limiting decorator (placeholder for actual implementation)
-    In production, use django-ratelimit or similar
-    """
-
-    def decorator(view_func):
-        @wraps(view_func)
-        def wrapper(request, *args, **kwargs):
-            # TODO: Implement actual rate limiting
-            # For now, just pass through
-            return view_func(request, *args, **kwargs)
-
-        return wrapper
-
-    return decorator

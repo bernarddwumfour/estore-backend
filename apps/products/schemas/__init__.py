@@ -48,6 +48,7 @@ from .validators import (
     validate_product_create,
     validate_product_update,
     validate_variant_create,
+    validate_variant_update,
     validate_review_create,
 )
 
@@ -79,5 +80,6 @@ __all__ = [
     'validate_product_create',
     'validate_product_update',
     'validate_variant_create',
+    'validate_variant_update',
     'validate_review_create',
 ]

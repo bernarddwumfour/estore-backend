@@ -4,6 +4,7 @@ No business logic - just queries
 """
 
 from typing import Optional, List, Dict,  Tuple
+from django.core.exceptions import ValidationError
 from django.db.models import Q
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.products.models import ProductVariant, Product
@@ -143,7 +144,7 @@ def get_variant_by_id(
         if require_active:
             queryset = queryset.filter(is_active=True)
         return queryset.get(id=variant_id)
-    except (ProductVariant.DoesNotExist, ValueError):
+    except (ProductVariant.DoesNotExist, ValueError, ValidationError):
         return None
 
 

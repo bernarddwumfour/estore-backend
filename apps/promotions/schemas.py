@@ -3,9 +3,9 @@ Promotion Schemas - Serialization and validation
 """
 
 from typing import Dict, Any, Optional, List, Tuple
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
-from .models import PromotionItem,Promotion
+from .models import PromotionItem, Promotion, DiscountCode
 
 def validate_promotion_create(data: Dict[str, Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
     """Validate promotion creation data"""
@@ -23,14 +23,17 @@ def validate_promotion_create(data: Dict[str, Any]) -> Tuple[Optional[Dict], Opt
     
     # Bundle price
     bundle_price = data.get("bundle_price")
-    try:
-        bundle_price = Decimal(str(bundle_price))
-        if bundle_price < 0:
-            errors["bundle_price"] = "Must be positive"
-        else:
-            cleaned["bundle_price"] = bundle_price
-    except (TypeError, ValueError):
-        errors["bundle_price"] = "Valid decimal number required"
+    if bundle_price is None or bundle_price == "":
+        errors["bundle_price"] = "This field is required"
+    else:
+        try:
+            bundle_price = Decimal(str(bundle_price))
+            if bundle_price < 0:
+                errors["bundle_price"] = "Must be positive"
+            else:
+                cleaned["bundle_price"] = bundle_price
+        except (TypeError, ValueError, InvalidOperation):
+            errors["bundle_price"] = "Valid decimal number required"
     
     # Start date
     starts_at = data.get("starts_at")
@@ -88,6 +91,15 @@ def validate_promotion_create(data: Dict[str, Any]) -> Tuple[Optional[Dict], Opt
         
         cleaned["items"] = cleaned_items
     
+    # End date must be after start date (only check when both parsed cleanly)
+    if "starts_at" in cleaned and "ends_at" in cleaned:
+        try:
+            if cleaned["ends_at"] <= cleaned["starts_at"]:
+                errors["ends_at"] = "End date must be after the start date"
+        except TypeError:
+            # Mixed naive/aware datetimes — let the service normalise tz instead
+            pass
+
     # Optional fields
     cleaned["description"] = data.get("description", "")
     cleaned["meta_title"] = data.get("meta_title", "")[:200]
@@ -269,3 +281,151 @@ def serialize_bulk_action_result(results: Dict) -> Dict:
         "success_count": len(results["success"]),
         "failed_count": len(results["failed"]),
     }
+
+
+def serialize_discount_code(discount_code: DiscountCode) -> Dict[str, Any]:
+    return {
+        "id": str(discount_code.id),
+        "code": discount_code.code,
+        "name": discount_code.name,
+        "description": discount_code.description,
+        "discount_type": discount_code.discount_type,
+        "value": float(discount_code.value),
+        "min_subtotal": float(discount_code.min_subtotal),
+        "max_discount_amount": (
+            float(discount_code.max_discount_amount)
+            if discount_code.max_discount_amount is not None
+            else None
+        ),
+        "is_active": discount_code.is_active,
+        "starts_at": discount_code.starts_at.isoformat() if discount_code.starts_at else None,
+        "ends_at": discount_code.ends_at.isoformat() if discount_code.ends_at else None,
+        "is_affiliate_code": bool(discount_code.affiliate_id),
+        "affiliate": {
+            "id": str(discount_code.affiliate.id),
+            "email": discount_code.affiliate.user.email,
+            "referral_code": discount_code.affiliate.referral_code,
+        } if discount_code.affiliate else None,
+        "created_by": {
+            "id": str(discount_code.created_by.id),
+            "email": discount_code.created_by.email,
+        } if discount_code.created_by else None,
+        "created_at": discount_code.created_at.isoformat() if discount_code.created_at else None,
+        "updated_at": discount_code.updated_at.isoformat() if discount_code.updated_at else None,
+    }
+
+
+def serialize_discount_code_list(discount_codes: List[DiscountCode]) -> List[Dict[str, Any]]:
+    return [serialize_discount_code(code) for code in discount_codes]
+
+
+def validate_discount_code_upsert(
+    data: Dict[str, Any],
+    *,
+    partial: bool = False,
+) -> Tuple[Optional[Dict], Optional[Dict]]:
+    errors = {}
+    cleaned: Dict[str, Any] = {}
+
+    def _parse_decimal(field: str, allow_blank: bool = False):
+        value = data.get(field)
+        if value in (None, ""):
+            if partial or allow_blank:
+                return None
+            errors[field] = "This field is required"
+            return None
+        try:
+            decimal_value = Decimal(str(value))
+        except (TypeError, ValueError, InvalidOperation):
+            errors[field] = "Valid decimal number required"
+            return None
+        if decimal_value < 0:
+            errors[field] = "Must be positive"
+            return None
+        return decimal_value
+
+    if "code" in data or not partial:
+        code = (data.get("code") or "").strip().upper()
+        if not code and not partial:
+            errors["code"] = "This field is required"
+        elif code:
+            cleaned["code"] = code
+
+    if "name" in data or not partial:
+        name = (data.get("name") or "").strip()
+        if not name and not partial:
+            errors["name"] = "This field is required"
+        elif name:
+            cleaned["name"] = name
+
+    if "description" in data:
+        cleaned["description"] = data.get("description", "")
+
+    if "discount_type" in data or not partial:
+        discount_type = data.get("discount_type")
+        valid_types = {DiscountCode.TYPE_PERCENTAGE, DiscountCode.TYPE_FIXED}
+        if not discount_type and not partial:
+            errors["discount_type"] = "This field is required"
+        elif discount_type and discount_type not in valid_types:
+            errors["discount_type"] = "Invalid discount type"
+        elif discount_type:
+            cleaned["discount_type"] = discount_type
+
+    value = _parse_decimal("value")
+    if value is not None:
+        cleaned["value"] = value
+
+    min_subtotal = _parse_decimal("min_subtotal", allow_blank=True)
+    if min_subtotal is not None:
+        cleaned["min_subtotal"] = min_subtotal
+
+    if "max_discount_amount" in data:
+        max_discount = data.get("max_discount_amount")
+        if max_discount in ("", None):
+            cleaned["max_discount_amount"] = None
+        else:
+            parsed_max = _parse_decimal("max_discount_amount", allow_blank=True)
+            if parsed_max is not None:
+                cleaned["max_discount_amount"] = parsed_max
+
+    for field in ("starts_at", "ends_at"):
+        if field in data:
+            value = data.get(field)
+            if value in ("", None):
+                cleaned[field] = None
+            else:
+                try:
+                    cleaned[field] = datetime.fromisoformat(str(value).replace('Z', '+00:00'))
+                except ValueError:
+                    errors[field] = "Invalid date format"
+
+    if "is_active" in data:
+        cleaned["is_active"] = bool(data.get("is_active"))
+
+    if errors:
+        return None, errors
+    return cleaned, None
+
+
+def serialize_affiliate_commission(commission) -> Dict[str, Any]:
+    """Serialize a commission row for the affiliate's own dashboard."""
+    order = commission.order
+    return {
+        "id": str(commission.id),
+        "order_number": order.order_number,
+        "order_date": order.created_at.isoformat(),
+        "order_status": order.status,
+        "order_total": float(order.total),
+        "currency": order.currency,
+        "discount_code": commission.discount_code.code if commission.discount_code else None,
+        "commission_rate": float(commission.commission_rate),
+        "commissionable_amount": float(commission.commissionable_amount),
+        "commission_amount": float(commission.commission_amount),
+        "status": commission.status,
+        "status_display": commission.get_status_display(),
+        "accrued_at": commission.accrued_at.isoformat() if commission.accrued_at else None,
+    }
+
+
+def serialize_affiliate_commission_list(commissions: List) -> List[Dict[str, Any]]:
+    return [serialize_affiliate_commission(c) for c in commissions]

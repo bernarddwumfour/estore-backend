@@ -542,7 +542,9 @@ class ProductService:
                     
                     if new_status == Product.STATUS_PUBLISHED and not product.published_at:
                         product.published_at = timezone.now()
-                    
+                        from apps.social.services import SocialPostService
+                        SocialPostService.queue_for_approval("product", product)
+
                     product.save()
                     results["success"].append({
                         "id": product_id, "name": product.title,
@@ -1036,6 +1038,10 @@ class AdminProductService:
                 published_at=timezone.now() if data.get("status") == Product.STATUS_PUBLISHED else None,
             )
 
+            if product.status == Product.STATUS_PUBLISHED:
+                from apps.social.services import SocialPostService
+                SocialPostService.queue_for_approval("product", product)
+
             duration_ms = (time.time() - start_time) * 1000
             log_action(
                 logger=logger,
@@ -1119,6 +1125,8 @@ class AdminProductService:
 
             if product.status == Product.STATUS_PUBLISHED and not product.published_at:
                 product.published_at = timezone.now()
+                from apps.social.services import SocialPostService
+                SocialPostService.queue_for_approval("product", product)
 
             product.save()
 
@@ -1267,7 +1275,7 @@ class AdminProductService:
     @staticmethod
     @transaction.atomic
     def update_variant(
-        variant_id: str, data: Dict[str, Any], user: User
+        variant_id: str, data: Dict[str, Any], user: User, image_files: List = None
     ) -> Tuple[Optional[ProductVariant], Optional[Dict]]:
         """Update product variant (admin only)"""
         start_time = time.time()
@@ -1293,15 +1301,73 @@ class AdminProductService:
                 if get_variant_by_sku(data["sku"]):
                     return None, {"sku": "SKU already exists"}
 
+            if "attributes" in data and variant.product.options:
+                for option_key in data["attributes"]:
+                    if option_key not in variant.product.options:
+                        return None, {
+                            f"attributes.{option_key}": f'Option "{option_key}" not allowed for this product'
+                        }
+
+            candidate_price = data.get("price", variant.price)
+            candidate_discount_amount = data.get(
+                "discount_amount", variant.discount_amount
+            )
+            if candidate_discount_amount > candidate_price:
+                return None, {"discount_amount": "Cannot exceed price"}
+
             if data.get("is_default", False) and not variant.is_default:
                 ProductVariant.objects.filter(product=variant.product, is_default=True).update(is_default=False)
 
             for field in ["sku", "price", "discount_amount", "stock", "is_default", "is_active",
-                          "weight", "height", "width", "depth", "low_stock_threshold", "attributes"]:
+                          "weight", "height", "width", "depth", "low_stock_threshold",
+                          "attributes", "cost_price"]:
                 if field in data:
                     setattr(variant, field, data[field])
 
             variant.save()
+
+            remove_image_ids = data.get("remove_images") or []
+            if remove_image_ids:
+                VariantImage.objects.filter(
+                    variant=variant, id__in=remove_image_ids
+                ).delete()
+
+            images_created = 0
+            if image_files:
+                actual_image_files = []
+                if hasattr(image_files, "getlist"):
+                    if "images" in image_files:
+                        actual_image_files = image_files.getlist("images")
+                    else:
+                        for key in image_files.keys():
+                            actual_image_files.extend(image_files.getlist(key))
+                elif isinstance(image_files, list):
+                    actual_image_files = image_files
+                else:
+                    actual_image_files = [image_files]
+
+                alt_texts = data.get("image_alt_texts", [])
+                if not isinstance(alt_texts, list):
+                    alt_texts = []
+
+                next_order = VariantImage.objects.filter(variant=variant).count()
+                for i, image_file in enumerate(actual_image_files):
+                    if image_file:
+                        image_type = "main" if next_order == 0 and i == 0 else "gallery"
+                        alt_text = (
+                            alt_texts[i]
+                            if i < len(alt_texts) and alt_texts[i]
+                            else f"{variant.product.title} - {variant.sku}"
+                        )
+                        VariantImage.objects.create(
+                            variant=variant,
+                            image=image_file,
+                            image_type=image_type,
+                            alt_text=alt_text,
+                            order=next_order + i,
+                            is_active=True,
+                        )
+                        images_created += 1
 
             duration_ms = (time.time() - start_time) * 1000
             log_action(
@@ -1316,6 +1382,8 @@ class AdminProductService:
                     "variant_id": str(variant.id),
                     "sku": variant.sku,
                     "updated_fields": list(data.keys()),
+                    "removed_images_count": len(remove_image_ids),
+                    "images_created": images_created,
                     "duration_ms": round(duration_ms, 2),
                     "requested_by": get_user_info(user)
                 }

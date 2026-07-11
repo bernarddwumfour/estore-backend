@@ -1,0 +1,22 @@
+{% extends "emails/base.html" %}
+
+{% block heading %}Your Order Has Shipped &#128230;{% endblock %}
+
+{% block content %}
+<p>Good news &mdash; your order <strong>{{ order.order_number }}</strong> is on its way!</p>
+
+<div style="background: #f8f9fa; padding: 15px; border-radius: 5px; margin: 20px 0;">
+    {% if shipment.carrier %}<p style="margin: 0 0 4px;"><strong>Carrier:</strong> {{ shipment.carrier }}</p>{% endif %}
+    {% if shipment.tracking_number %}<p style="margin: 0 0 4px;"><strong>Tracking Number:</strong> {{ shipment.tracking_number }}</p>{% endif %}
+    {% if shipment.estimated_delivery %}<p style="margin: 0;"><strong>Estimated Delivery:</strong> {{ shipment.estimated_delivery|date:"M j, Y" }}</p>{% endif %}
+</div>
+
+{% if shipment.tracking_url %}
+<p>
+    <a href="{{ shipment.tracking_url }}"
+       style="background: #4CAF50; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; display: inline-block;">
+        Track Your Package
+    </a>
+</p>
+{% endif %}
+{% endblock %}

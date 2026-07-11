@@ -577,7 +577,12 @@ class AdminReviewService:
         user: User
     ) -> Tuple[bool, Optional[Dict]]:
         try:
-            review = OrderReview.objects.select_related('order').get(id=review_id)
+            review = OrderReview.objects.select_related("order").only(
+                "id",
+                "is_approved",
+                "order__id",
+                "order__order_number",
+            ).get(id=review_id)
             
             if review.is_approved:
                 return False, {"review": "Review is already approved"}
@@ -599,7 +604,12 @@ class AdminReviewService:
         user: User
     ) -> Tuple[bool, Optional[Dict]]:
         try:
-            review = OrderReview.objects.select_related('order').get(id=review_id)
+            review = OrderReview.objects.select_related("order").only(
+                "id",
+                "is_approved",
+                "order__id",
+                "order__order_number",
+            ).get(id=review_id)
             
             if not review.is_approved:
                 return False, {"review": "Review is already rejected"}
@@ -655,7 +665,16 @@ class AdminReviewService:
         
         for review_id in review_ids:
             try:
-                review = Model.objects.select_related().get(id=review_id)
+                if review_type == "product":
+                    review = Model.objects.select_related().get(id=review_id)
+                else:
+                    review = Model.objects.select_related("order").only(
+                        "id",
+                        "overall_rating",
+                        "is_approved",
+                        "order__id",
+                        "order__order_number",
+                    ).get(id=review_id)
                 
                 if action == "approve":
                     if review.is_approved:

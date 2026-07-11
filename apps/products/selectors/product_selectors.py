@@ -272,7 +272,16 @@ def get_products_filtered(
     
     if in_stock is not None:
         queryset = queryset.filter(db_has_stock=in_stock)
-    
+    else:
+        # Store-wide toggle: hide out-of-stock products from public listings
+        # unless the client explicitly filtered on stock
+        try:
+            from apps.common.models import GeneralConfig
+            if GeneralConfig.get_cached().hide_out_of_stock:
+                queryset = queryset.filter(db_has_stock=True)
+        except Exception:
+            pass
+
     # Filter by flags
     if featured is not None:
         queryset = queryset.filter(is_featured=featured)

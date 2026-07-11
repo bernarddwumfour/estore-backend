@@ -10,6 +10,28 @@ from apps.products.models import ProductReview, OrderReview
 from .product_selectors import get_product_by_slug
 
 
+def _order_review_queryset():
+    return OrderReview.objects.select_related("order", "user").only(
+        "id",
+        "order_id",
+        "user_id",
+        "title",
+        "comment",
+        "overall_rating",
+        "is_approved",
+        "helpful_yes",
+        "helpful_no",
+        "admin_response",
+        "admin_response_at",
+        "created_at",
+        "updated_at",
+        "order__id",
+        "order__order_number",
+        "user__id",
+        "user__email",
+    )
+
+
 def get_reviews_by_product(
     product_slug: str,
     page: int = 1,
@@ -90,9 +112,9 @@ def get_pending_order_reviews(
     page: int = 1,
     limit: int = 20,
 ) -> Tuple[List[OrderReview], int]:
-    queryset = OrderReview.objects.filter(
+    queryset = _order_review_queryset().filter(
         is_approved=False
-    ).select_related('order', 'user').order_by('-created_at')
+    ).order_by("-created_at")
 
     paginator = Paginator(queryset, limit)
     try:
@@ -110,7 +132,7 @@ def get_all_pending_reviews(
     limit: int = 20,
 ) -> Tuple[List, int]:
     product_reviews = list(ProductReview.objects.filter(is_approved=False).select_related('product', 'user'))
-    order_reviews = list(OrderReview.objects.filter(is_approved=False).select_related('order', 'user'))
+    order_reviews = list(_order_review_queryset().filter(is_approved=False))
 
     all_reviews = list(chain(product_reviews, order_reviews))
     all_reviews.sort(key=lambda x: x.created_at, reverse=True)
@@ -237,7 +259,7 @@ def get_all_order_reviews_admin(
     sort_by: str = "created_at",
     sort_order: str = "desc",
 ) -> Tuple[List[OrderReview], int, Dict]:
-    queryset = OrderReview.objects.select_related('order', 'user').all()
+    queryset = _order_review_queryset().all()
     
     if status == "approved":
         queryset = queryset.filter(is_approved=True)
@@ -346,7 +368,7 @@ def get_all_reviews_admin(
         product_reviews = list(product_qs.order_by(sort_field))
     
     if review_type in ["order", "all"]:
-        order_qs = OrderReview.objects.select_related('order', 'user').all()
+        order_qs = _order_review_queryset().all()
         
         if status == "approved":
             order_qs = order_qs.filter(is_approved=True)

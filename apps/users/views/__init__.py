@@ -54,7 +54,10 @@ from .staff_views import (
 from .affiliate_views import (
     list_affiliate_users,
     make_affiliate,
+    update_affiliate_commission,
+    make_affiliate_by_email,
     remove_affiliate,
+    toggle_affiliate_status,
     get_affiliate_profile,
 )
 
@@ -101,7 +104,10 @@ __all__ = [
     # Affiliate views
     'list_affiliate_users',
     'make_affiliate',
+    'update_affiliate_commission',
+    'make_affiliate_by_email',
     'remove_affiliate',
+    'toggle_affiliate_status',
     'get_affiliate_profile',
     # Statistics views
     'user_statistics',

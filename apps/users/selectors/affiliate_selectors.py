@@ -4,7 +4,8 @@ No business logic - just queries
 """
 
 from typing import List, Dict, Optional, Tuple
-from django.db.models import Q
+from django.db.models import Q, Count, Sum, DecimalField
+from django.db.models.functions import Coalesce
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.users.models.affiliate import Affiliate
 import logging
@@ -21,13 +22,24 @@ def get_affiliates_filtered(
     level: str = None,
     min_earnings: float = None,
     max_earnings: float = None,
+    min_referrals: int = None,
     sort_by: str = "joined_at",
     sort_order: str = "desc",
     include_addresses: bool = False,
 ) -> Tuple[List[Affiliate], int, Dict]:
     """Get filtered and paginated affiliate users"""
     
-    queryset = Affiliate.objects.select_related('user').prefetch_related('user__addresses')
+    queryset = Affiliate.objects.select_related('user').prefetch_related('user__addresses').annotate(
+        attributed_orders_count=Count('attributed_orders', distinct=True),
+        attributed_sales_total=Coalesce(
+            Sum('attributed_orders__total', output_field=DecimalField(max_digits=12, decimal_places=2)),
+            0,
+            output_field=DecimalField(max_digits=12, decimal_places=2),
+        ),
+        pending_commissions_count=Count('commissions', filter=Q(commissions__status='pending'), distinct=True),
+        accrued_commissions_count=Count('commissions', filter=Q(commissions__status='accrued'), distinct=True),
+        reversed_commissions_count=Count('commissions', filter=Q(commissions__status='reversed'), distinct=True),
+    )
     
     # Filter by affiliate active status
     if is_active is not None:
@@ -49,6 +61,8 @@ def get_affiliates_filtered(
         queryset = queryset.filter(total_earnings__gte=min_earnings)
     if max_earnings is not None:
         queryset = queryset.filter(total_earnings__lte=max_earnings)
+    if min_referrals is not None:
+        queryset = queryset.filter(total_referrals__gte=min_referrals)
     
     # Search by user email, first_name, last_name, phone
     if search:
@@ -60,7 +74,7 @@ def get_affiliates_filtered(
         )
     
     # Apply sorting
-    allowed_sort_fields = ['joined_at', 'total_earnings', 'total_referrals', 'level']
+    allowed_sort_fields = ['joined_at', 'total_earnings', 'total_referrals', 'level', 'attributed_orders_count', 'attributed_sales_total']
     
     if sort_by in allowed_sort_fields:
         if sort_order == "desc":

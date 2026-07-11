@@ -18,7 +18,7 @@ from ..services.product_service import (
     WishlistService,
     AdminProductService,
 )
-from ..schemas import validate_variant_create
+from ..schemas import validate_variant_create, validate_variant_update, serialize_variant
 from ..models import ProductVariant
 from apps.common.utils import sanitize_search_query
 from apps.common.logging import log_action, LogSeverity, get_user_info
@@ -27,6 +27,24 @@ logger = logging.getLogger(__name__)
 
 # App name constant for filtering in UI
 APP_NAME = "products"
+
+
+def _extract_indexed_form_values(data, field_name):
+    """Collect FormData fields like image_alt_texts[0] into a list."""
+    if isinstance(data.get(field_name), list):
+        return data[field_name]
+
+    indexed_values = []
+    prefix = f"{field_name}["
+    for key, value in data.items():
+        if key.startswith(prefix) and key.endswith("]"):
+            try:
+                index = int(key[len(prefix):-1])
+            except ValueError:
+                continue
+            indexed_values.append((index, value))
+
+    return [value for _, value in sorted(indexed_values)]
 
 
 def _is_admin(request) -> bool:
@@ -612,7 +630,7 @@ def admin_variant_create(request, product_id):
 @require_http_methods(["PUT", "PATCH"])
 @jwt_required
 @role_required("admin", "staff")
-@json_request_required
+@multipart_request_allowed
 @ratelimit(key='user', rate='50/h', method='PUT', block=True)
 def admin_variant_update(request, variant_id):
     """Admin: Update product variant"""
@@ -633,10 +651,35 @@ def admin_variant_update(request, variant_id):
     )
     
     try:
-        data = request.json_data
+        data = request.json_data if hasattr(request, "json_data") else {}
+        files = request.files_data if hasattr(request, "files_data") else None
+
+        cleaned, errors = validate_variant_update(data, is_admin=True)
+        if errors:
+            _log_variant_request(
+                request, action, start_time, 400,
+                extra={"variant_id": variant_id, "errors": errors}
+            )
+            return APIResponse.validation_error(errors)
+
+        if "remove_images" in data and isinstance(data["remove_images"], list):
+            cleaned["remove_images"] = data["remove_images"]
+
+        image_alt_texts = _extract_indexed_form_values(data, "image_alt_texts")
+        if image_alt_texts:
+            cleaned["image_alt_texts"] = image_alt_texts
+
+        has_update_fields = any(key != "image_alt_texts" for key in cleaned.keys())
+        if not has_update_fields and not files:
+            errors = {"variant": "No update fields provided"}
+            _log_variant_request(
+                request, action, start_time, 400,
+                extra={"variant_id": variant_id, "errors": errors}
+            )
+            return APIResponse.validation_error(errors)
 
         variant, errors = AdminProductService.update_variant(
-            variant_id, data, request.user
+            variant_id, cleaned, request.user, image_files=files
         )
 
         if errors:
@@ -651,13 +694,20 @@ def admin_variant_update(request, variant_id):
             extra={
                 "variant_id": str(variant.id),
                 "sku": variant.sku,
-                "updated_fields": list(data.keys()),
+                "updated_fields": list(cleaned.keys()),
                 "requested_by": get_user_info(user)
             }
         )
 
+        variant_data = serialize_variant(variant, is_admin=True, include_images=True)
+        variant_data["product"] = {
+            "id": str(variant.product.id),
+            "title": variant.product.title,
+            "slug": variant.product.slug,
+        }
+
         return APIResponse.success(
-            data={"variant_id": str(variant.id)},
+            data={"variant_id": str(variant.id), "variant": variant_data},
             message="Variant updated successfully"
         )
 

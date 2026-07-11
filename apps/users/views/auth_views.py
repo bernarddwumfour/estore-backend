@@ -5,10 +5,15 @@ Authentication Views - Login, registration, logout, token refresh
 import logging
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django_ratelimit.decorators import ratelimit
 from estore.utils.responses import APIResponse
 from apps.users.decorators.auth import jwt_required, role_required, json_request_required
 from apps.users.services.auth_service import AuthService
-from apps.users.utils.token_utils import generate_jwt_token, validate_jwt_token
+from apps.users.utils.token_utils import (
+    generate_jwt_token,
+    validate_jwt_token,
+    revoke_token,
+)
 from apps.users.models.user import User
 
 logger = logging.getLogger(__name__)
@@ -56,6 +61,8 @@ def register_user(request):
 
 @csrf_exempt
 @require_http_methods(["POST"])
+@ratelimit(key="ip", rate="5/m", method="POST", block=True)
+@ratelimit(key="post:email", rate="10/h", method="POST", block=True)
 @json_request_required
 def login(request):
     """User login"""
@@ -84,9 +91,21 @@ def login(request):
 @csrf_exempt
 @require_http_methods(["POST"])
 @jwt_required
+@json_request_required
 def logout(request):
-    """User logout - revoke refresh token"""
+    """User logout - revoke the current access token and the supplied refresh token."""
     try:
+        # Revoke the access token used for this request.
+        if getattr(request, "token_payload", None):
+            revoke_token(request.token_payload)
+
+        # Revoke the refresh token if the client supplies it.
+        refresh = (getattr(request, "json_data", None) or {}).get("refresh_token")
+        if refresh:
+            verified, payload = validate_jwt_token(refresh)
+            if verified:
+                revoke_token(payload)
+
         return APIResponse.success(message="Logged out successfully")
     except Exception as e:
         logger.error(f"Logout view error: {str(e)}")
@@ -106,9 +125,13 @@ def refresh_token(request):
 
         refresh_token = data["refresh_token"]
         verified, payload = validate_jwt_token(refresh_token)
-        
+
         if not verified:
             return APIResponse.unauthorized("Invalid or expired refresh token")
+
+        # Only refresh tokens may be exchanged here (an access token must not work).
+        if payload.get("type") != "refresh":
+            return APIResponse.unauthorized("Invalid token type")
 
         user_id = payload.get("user_id")
         if not user_id:
@@ -118,6 +141,10 @@ def refresh_token(request):
             user = User.objects.get(id=user_id, is_active=True)
         except User.DoesNotExist:
             return APIResponse.unauthorized("User not found or inactive")
+
+        # Refresh-token rotation: revoke the presented refresh token so it cannot
+        # be replayed, then issue a fresh pair.
+        revoke_token(payload)
 
         access_token = generate_jwt_token(user, "access")
         new_refresh_token = generate_jwt_token(user, "refresh")
