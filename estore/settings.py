@@ -155,6 +155,7 @@ INSTALLED_APPS = [
     "apps.promotions",
     "apps.marketing",
     "apps.social",
+    "apps.blog",
 ]
 
 for optional_app in ["cloudinary_storage", "django.contrib.staticfiles", "cloudinary"]:

@@ -34,6 +34,7 @@ urlpatterns = [
                 path("common", include("apps.common.urls")),
                 path("marketing", include("apps.marketing.urls")),
                 path("social", include("apps.social.urls")),
+                path("blog", include("apps.blog.urls")),
             ]
         ),
     ),
