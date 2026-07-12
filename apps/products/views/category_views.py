@@ -11,7 +11,7 @@ from apps.users.decorators.auth import (
     role_required,
 )
 from estore.utils.responses import APIResponse
-from ..services.product_service import CategoryService
+from ..services.category_service import CategoryService
 from apps.common.utils import coerce_bool
 from ..models import Product
 from apps.common.utils import sanitize_search_query
@@ -478,7 +478,7 @@ def admin_category_create(request):
     )
     
     try:
-        from apps.products.services.product_service import CategoryService
+        from apps.products.services.category_service import CategoryService
         
         # Handle multipart form data
         if request.content_type and 'multipart/form-data' in request.content_type:

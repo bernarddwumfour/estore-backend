@@ -28,6 +28,29 @@ class SocialPostService:
     """Write operations for social posts"""
 
     @staticmethod
+    def _primary_media_url(media_items: Optional[List[Dict]], image_url: str = "") -> str:
+        if media_items:
+            first_url = media_items[0].get("url")
+            if first_url:
+                return str(first_url)
+        return image_url or ""
+
+    @staticmethod
+    def _media_items_for_post(post: SocialPost) -> List[Dict]:
+        if post.media_items:
+            return post.media_items
+        if post.image_url:
+            return SocialPostService._media_items_from_url(post.image_url)
+        return []
+
+    @staticmethod
+    def _media_items_from_url(url: str) -> List[Dict]:
+        media_type = "video" if url.lower().split("?", 1)[0].endswith(
+            (".mp4", ".mov", ".webm")
+        ) else "image"
+        return [{"type": media_type, "url": url}]
+
+    @staticmethod
     def resolve_platforms(
         account_ids: Optional[List[str]] = None,
     ) -> Tuple[Optional[List[Dict]], Optional[str]]:
@@ -60,7 +83,7 @@ class SocialPostService:
     @staticmethod
     def _send_to_zernio(post: SocialPost, user) -> Tuple[Optional[SocialPost], Optional[str]]:
         """Send a SocialPost to Zernio and record the outcome on the row."""
-        media_urls = [post.image_url] if post.image_url else None
+        media_items = SocialPostService._media_items_for_post(post)
         scheduled_for = (
             post.scheduled_for.isoformat() if post.scheduled_for else None
         )
@@ -68,7 +91,7 @@ class SocialPostService:
         result, error = ZernioService.create_post(
             content=post.caption,
             platforms=post.platforms,
-            media_urls=media_urls,
+            media_items=media_items,
             scheduled_for=scheduled_for,
         )
 
@@ -104,7 +127,16 @@ class SocialPostService:
         post = SocialPost.objects.create(
             source=SocialPost.SOURCE_MANUAL,
             caption=data["caption"],
-            image_url=data.get("image_url", ""),
+            image_url=SocialPostService._primary_media_url(
+                data.get("media_items") or [], data.get("image_url", "")
+            ),
+            media_items=(
+                data["media_items"]
+                if "media_items" in data
+                else SocialPostService._media_items_from_url(data["image_url"])
+                if data.get("image_url")
+                else []
+            ),
             platforms=platforms,
             scheduled_for=data.get("scheduled_for"),
             status=SocialPost.STATUS_PENDING_APPROVAL,
@@ -125,6 +157,14 @@ class SocialPostService:
             post.caption = data["caption"]
         if "image_url" in data:
             post.image_url = data["image_url"]
+            if "media_items" not in data:
+                post.media_items = (
+                    SocialPostService._media_items_from_url(data["image_url"])
+                    if data["image_url"] else []
+                )
+        if "media_items" in data:
+            post.media_items = data["media_items"]
+            post.image_url = SocialPostService._primary_media_url(post.media_items)
         if "scheduled_for" in data:
             post.scheduled_for = data["scheduled_for"]
 
@@ -133,7 +173,10 @@ class SocialPostService:
             return None, error
         post.platforms = platforms
         post.save(
-            update_fields=["caption", "image_url", "scheduled_for", "platforms", "updated_at"]
+            update_fields=[
+                "caption", "image_url", "media_items", "scheduled_for",
+                "platforms", "updated_at",
+            ]
         )
         return SocialPostService._send_to_zernio(post, user)
 
@@ -180,6 +223,10 @@ class SocialPostService:
                         object_id=object_id,
                         caption=caption,
                         image_url=image_url or "",
+                        media_items=(
+                            SocialPostService._media_items_from_url(image_url)
+                            if image_url else []
+                        ),
                         status=SocialPost.STATUS_PENDING_APPROVAL,
                     )
                 except Exception as e:

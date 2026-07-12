@@ -29,12 +29,8 @@ When a rule and an existing file disagree, the rule wins — fix the file.
 
 ## 2. Response envelope
 
-- Always return via the shared helper — never a bare `JsonResponse`/`dict`.
-  The products/orders apps use `common.responses` (`ok`, `created`,
-  `bad_request`, …); promotions uses `estore.utils.responses.APIResponse`.
-  **Pick the one already imported in the app you're editing and stay
-  consistent within that app.** (Consolidating to one module is a tracked
-  cleanup — see §12.)
+- Always return via `estore.utils.responses.APIResponse` — never a bare
+  `JsonResponse`/`dict`.
 - Every response is `{ "data": ..., "message": ..., "errors": ... }`.
 - Status codes are meaningful: 200 ok, 201 created, 400 validation/bad input,
   401 unauthenticated, 403 wrong role, 404 missing, 409 conflict, 500 unexpected.
@@ -159,15 +155,35 @@ When a rule and an existing file disagree, the rule wins — fix the file.
 
 ## 12. Known cleanups (don't add to these)
 
-- Two response modules exist (`common.responses` and
-  `estore.utils.responses`); consolidate to one over time. Until then, match the
-  app you're in.
 - Heavy per-method `log_action` boilerplate should migrate to a
   decorator/middleware. Don't copy-paste more of it than necessary.
 - Synchronous audit logging should move to a background worker once a broker
   (Redis/Celery) is provisioned.
 
-## 13. Before "done"
+## 13. Agent change logging (mandatory for all AI coding agents)
+
+- **Before making any change**, read `models-change-logs.md` at the repo root.
+  It records what was changed, why, and context the next agent needs.
+- **After every change session**, append an entry to `models-change-logs.md` with:
+  - Date and a summary of the work
+  - Every file added, changed, or deleted
+  - The reasoning behind each change
+  - Any warnings or context for the next agent
+- This is a **hard requirement** — multiple agents may work on this project
+  concurrently, and the log is the single source of truth for agent-driven
+  changes.
+
+## 14. Commit messages
+
+- **Commit messages must be plain and focused on the change.** Describe what
+  changed and why.
+- **Never include agent attribution** in commit messages. Prohibited trailers:
+  `Co-Authored-By`, `Signed-off-by`, `Acked-by`, `Reviewed-by`, or any similar
+  line that names an AI tool or model.
+- Use conventional commit prefixes (`fix:`, `feat:`, `refactor:`, `chore:`,
+  `docs:`, `test:`) so the intent is clear from the summary line.
+
+## 15. Before "done"
 
 - [ ] No secret added to tracked files; `.env.example` updated if a key was added.
 - [ ] Input validated; malformed input returns 400, not 500.

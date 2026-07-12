@@ -65,8 +65,13 @@ class ZernioServiceTests(TestCase):
         self.assertEqual(result["_id"], "zp_1")
         payload = mock_request.call_args.kwargs["json"]
         self.assertTrue(payload["publishNow"])
-        self.assertEqual(payload["mediaUrls"], ["https://res.cloudinary.com/img.jpg"])
+        self.assertEqual(
+            payload["mediaItems"],
+            [{"type": "image", "url": "https://res.cloudinary.com/img.jpg"}],
+        )
+        self.assertNotIn("mediaUrls", payload)
         self.assertNotIn("scheduledFor", payload)
+        self.assertTrue(mock_request.call_args.kwargs["headers"]["x-request-id"])
 
     @configured
     def test_create_post_scheduled_payload(self):
@@ -82,14 +87,313 @@ class ZernioServiceTests(TestCase):
         self.assertIn("timezone", payload)
 
     @configured
-    def test_400_surfaces_zernio_message(self):
+    def test_pending_post_analytics_is_not_an_error(self):
         with patch("apps.social.zernio_service.requests.request") as mock_request:
             mock_request.return_value = _response(
-                400, {"message": "Duplicate content: an identical post was already published"}
+                202,
+                {
+                    "postId": "zp_pending",
+                    "syncStatus": "pending",
+                    "message": "Analytics are still syncing",
+                    "analytics": {"impressions": 0, "engagementRate": 0},
+                },
+            )
+            analytics, error = ZernioService.get_post_analytics("zp_pending")
+
+        self.assertIsNone(error)
+        self.assertEqual(analytics["syncStatus"], "pending")
+        self.assertEqual(analytics["message"], "Analytics are still syncing")
+        self.assertEqual(analytics["impressions"], 0)
+
+    @configured
+    def test_post_analytics_reads_nested_and_platform_metrics(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(
+                200,
+                {
+                    "postId": "zp_analytics",
+                    "analytics": {
+                        "impressions": 0,
+                        "reach": 0,
+                        "likes": 0,
+                        "comments": 0,
+                        "shares": 0,
+                        "clicks": 0,
+                        "engagementRate": 0,
+                    },
+                    "platformAnalytics": [
+                        {
+                            "platform": "instagram",
+                            "analytics": {
+                                "impressions": 100,
+                                "reach": 80,
+                                "likes": 7,
+                                "comments": 3,
+                                "shares": 2,
+                                "clicks": 5,
+                                "engagementRate": 10.0,
+                            },
+                        },
+                        {
+                            "platform": "facebook",
+                            "analytics": {
+                                "impressions": 50,
+                                "reach": 30,
+                                "likes": 4,
+                                "comments": 2,
+                                "shares": 1,
+                                "clicks": 0,
+                                "engagementRate": 8.0,
+                            },
+                        },
+                    ],
+                    "syncStatus": "synced",
+                },
+            )
+            analytics, error = ZernioService.get_post_analytics("zp_analytics")
+
+        self.assertIsNone(error)
+        self.assertEqual(analytics["impressions"], 150)
+        self.assertEqual(analytics["reach"], 110)
+        self.assertEqual(analytics["likes"], 11)
+        self.assertEqual(analytics["comments"], 5)
+        self.assertEqual(analytics["shares"], 3)
+        self.assertEqual(analytics["clicks"], 5)
+        self.assertEqual(analytics["engagement"], 24)
+        self.assertEqual(analytics["engagementRate"], 9.0)
+
+    @configured
+    def test_post_analytics_accepts_account_id_and_metric_aliases(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(
+                200,
+                {
+                    "data": {
+                        "post": {
+                            "summary": {
+                                "impressionCount": "12",
+                                "likeCount": "5",
+                                "commentCount": "2",
+                                "shareCount": "1",
+                                "linkClicks": "4",
+                            },
+                            "syncStatus": "synced",
+                        }
+                    }
+                },
+            )
+            analytics, error = ZernioService.get_post_analytics(
+                "zp_analytics", account_id="acc_1"
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(
+            mock_request.call_args.kwargs["params"],
+            {"postId": "zp_analytics", "accountId": "acc_1"},
+        )
+        self.assertEqual(analytics["impressions"], 12)
+        self.assertEqual(analytics["likes"], 5)
+        self.assertEqual(analytics["comments"], 2)
+        self.assertEqual(analytics["shares"], 1)
+        self.assertEqual(analytics["clicks"], 4)
+
+    @configured
+    def test_create_post_explicit_media_items_payload(self):
+        media_items = [
+            {"type": "image", "url": "https://cdn.example.com/photo.jpg", "title": "Photo"},
+            {"type": "video", "url": "https://cdn.example.com/reel.mp4", "title": "Reel"},
+        ]
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(201, {"post": {"_id": "zp_media"}})
+            result, error = ZernioService.create_post(
+                "Hello",
+                [{"platform": "instagram", "accountId": "acc_ig"}],
+                media_items=media_items,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(result["_id"], "zp_media")
+        payload = mock_request.call_args.kwargs["json"]
+        self.assertEqual(payload["mediaItems"], media_items)
+        self.assertNotIn("mediaUrls", payload)
+
+    @configured
+    def test_409_surfaces_zernio_message(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(
+                409, {"message": "Duplicate content: an identical post was already published"}
             )
             result, error = ZernioService.create_post("x", [])
         self.assertIsNone(result)
         self.assertIn("Duplicate content", error)
+
+    @configured
+    def test_comment_endpoints_match_current_zernio_routes(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {"comments": []})
+            comments, error = ZernioService.list_post_comments("zp_1", "acc_1")
+            self.assertIsNone(error)
+            self.assertEqual(comments, [])
+            self.assertEqual(mock_request.call_args.args[0], "GET")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/comments/zp_1"))
+            self.assertEqual(mock_request.call_args.kwargs["params"], {"accountId": "acc_1"})
+
+            mock_request.reset_mock()
+            mock_request.return_value = _response(200, {})
+            ZernioService.reply_comment("zp_1", "c1", "Thanks", account_id="acc_1")
+            self.assertEqual(mock_request.call_args.args[0], "POST")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/comments/zp_1"))
+            self.assertEqual(
+                mock_request.call_args.kwargs["json"],
+                {"accountId": "acc_1", "commentId": "c1", "message": "Thanks"},
+            )
+
+            mock_request.reset_mock()
+            ZernioService.comment_action("zp_1", "c1", "like", account_id="acc_1", cid="cid_1")
+            self.assertEqual(mock_request.call_args.args[0], "POST")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/comments/zp_1/c1/like"))
+            self.assertEqual(mock_request.call_args.kwargs["json"], {"accountId": "acc_1", "cid": "cid_1"})
+
+            mock_request.reset_mock()
+            ZernioService.comment_action("zp_1", "c1", "unlike", account_id="acc_1", like_uri="like_1")
+            self.assertEqual(mock_request.call_args.args[0], "DELETE")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/comments/zp_1/c1/like"))
+            self.assertEqual(
+                mock_request.call_args.kwargs["params"],
+                {"accountId": "acc_1", "likeUri": "like_1"},
+            )
+
+    @configured
+    def test_nested_comment_replies_are_flattened_for_ui(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(
+                200,
+                {
+                    "comments": [
+                        {
+                            "commentId": "c_parent",
+                            "content": {"text": "Top-level comment"},
+                            "from": {"name": "Customer"},
+                            "createdAt": "2030-01-01T10:00:00Z",
+                            "replies": [
+                                {
+                                    "commentId": "c_reply",
+                                    "content": {"text": "Store reply"},
+                                    "from": {"name": "Store"},
+                                    "createdAt": "2030-01-01T10:05:00Z",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+            comments, error = ZernioService.list_post_comments("zp_1", "acc_1")
+
+        self.assertIsNone(error)
+        self.assertEqual(len(comments), 2)
+        self.assertEqual(comments[0]["id"], "c_parent")
+        self.assertEqual(comments[0]["message"], "Top-level comment")
+        self.assertFalse(comments[0]["isReply"])
+        self.assertEqual(comments[1]["id"], "c_reply")
+        self.assertEqual(comments[1]["message"], "Store reply")
+        self.assertTrue(comments[1]["isReply"])
+        self.assertEqual(comments[1]["parentId"], "c_parent")
+        self.assertEqual(comments[1]["depth"], 1)
+
+    @configured
+    def test_message_endpoints_match_current_zernio_routes(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {"messages": []})
+            messages, error = ZernioService.list_messages("conv_1", "acc_1")
+            self.assertIsNone(error)
+            self.assertEqual(messages, [])
+            self.assertEqual(mock_request.call_args.args[0], "GET")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/conversations/conv_1/messages"))
+            self.assertEqual(mock_request.call_args.kwargs["params"], {"accountId": "acc_1"})
+
+            mock_request.reset_mock()
+            mock_request.return_value = _response(200, {})
+            ZernioService.send_message("conv_1", "Hello", "acc_1")
+            self.assertEqual(mock_request.call_args.args[0], "POST")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/inbox/conversations/conv_1/messages"))
+            self.assertEqual(mock_request.call_args.kwargs["json"], {"accountId": "acc_1", "message": "Hello"})
+
+    @configured
+    def test_nested_conversation_response_is_normalized_for_chat_ui(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {
+                "data": {
+                    "conversations": [
+                        {
+                            "conversationId": "conv_nested",
+                            "account": {"_id": "acc_nested"},
+                            "participant": {"name": "Ama Mensah"},
+                            "lastMessage": {
+                                "text": "Do you deliver today?",
+                                "direction": "incoming",
+                                "createdAt": "2030-01-01T10:00:00Z",
+                            },
+                        }
+                    ]
+                }
+            })
+            conversations, error = ZernioService.list_conversations()
+
+        self.assertIsNone(error)
+        self.assertEqual(len(conversations), 1)
+        self.assertEqual(conversations[0]["id"], "conv_nested")
+        self.assertEqual(conversations[0]["accountId"], "acc_nested")
+        self.assertEqual(conversations[0]["participantName"], "Ama Mensah")
+        self.assertEqual(conversations[0]["lastMessage"], "Do you deliver today?")
+        self.assertEqual(conversations[0]["lastMessageAt"], "2030-01-01T10:00:00Z")
+        self.assertFalse(conversations[0]["lastMessageIsOwn"])
+
+    @configured
+    def test_nested_message_response_is_normalized_for_chat_ui(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {
+                "data": {
+                    "messages": [
+                        {
+                            "messageId": "msg_nested",
+                            "content": {"text": "Yes, we deliver today."},
+                            "sender": {"username": "store"},
+                            "direction": "outgoing",
+                            "sentAt": "2030-01-01T10:02:00Z",
+                        }
+                    ]
+                }
+            })
+            messages, error = ZernioService.list_messages("conv_nested", "acc_nested")
+
+        self.assertIsNone(error)
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["id"], "msg_nested")
+        self.assertEqual(messages[0]["message"], "Yes, we deliver today.")
+        self.assertEqual(messages[0]["senderName"], "store")
+        self.assertEqual(messages[0]["createdAt"], "2030-01-01T10:02:00Z")
+        self.assertTrue(messages[0]["isOwn"])
+
+    @configured
+    def test_account_and_profile_update_methods_match_docs(self):
+        with patch("apps.social.zernio_service.requests.request") as mock_request:
+            mock_request.return_value = _response(200, {"account": {"_id": "acc_1"}})
+            ZernioService.move_account("acc_1", "profile_1")
+            self.assertEqual(mock_request.call_args.args[0], "PATCH")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/accounts/acc_1"))
+            self.assertEqual(mock_request.call_args.kwargs["json"], {"profileId": "profile_1"})
+
+            mock_request.reset_mock()
+            mock_request.return_value = _response(200, {"profile": {"_id": "profile_1"}})
+            ZernioService.update_profile("profile_1", {"name": "Retail"})
+            self.assertEqual(mock_request.call_args.args[0], "PUT")
+            self.assertTrue(mock_request.call_args.args[1].endswith("/profiles/profile_1"))
+
+    @configured
+    def test_connect_requires_profile_id(self):
+        result, error = ZernioService.get_connect_url("instagram")
+        self.assertIsNone(result)
+        self.assertIn("Profile id is required", error)
 
     @configured
     def test_error_statuses_do_not_leak_body(self):
@@ -178,6 +482,27 @@ class SocialPostServiceTests(TestCase):
         # only the selected account was targeted
         platforms = mock_create.call_args.kwargs["platforms"]
         self.assertEqual(platforms, [{"platform": "twitter", "accountId": "acc_tw"}])
+
+    @configured
+    def test_create_manual_post_sends_multiple_media_items(self):
+        media_items = [
+            {"type": "image", "url": "https://cdn.example.com/photo.jpg", "title": "Photo"},
+            {"type": "video", "url": "https://cdn.example.com/reel.mp4", "title": "Reel"},
+        ]
+        with patch.object(
+            ZernioService, "list_accounts", return_value=(ZERNIO_ACCOUNTS, None)
+        ), patch.object(
+            ZernioService, "create_post", return_value=({"_id": "zp_media"}, None)
+        ) as mock_create:
+            post, error = SocialPostService.create_manual_post(
+                {"caption": "Gallery", "media_items": media_items, "account_ids": ["acc_ig"]},
+                self.admin,
+            )
+
+        self.assertIsNone(error)
+        self.assertEqual(post.media_items, media_items)
+        self.assertEqual(post.image_url, "https://cdn.example.com/photo.jpg")
+        self.assertEqual(mock_create.call_args.kwargs["media_items"], media_items)
 
     @configured
     def test_create_manual_post_zernio_failure_records_failed(self):
@@ -330,6 +655,10 @@ class SocialApiTests(TestCase):
 
     @configured
     def test_create_post_happy_path(self):
+        media_items = [
+            {"type": "image", "url": "https://cdn.example.com/photo.jpg", "title": "Photo"},
+            {"type": "video", "url": "https://cdn.example.com/reel.mp4", "title": "Reel"},
+        ]
         with patch.object(
             ZernioService, "list_accounts", return_value=(ZERNIO_ACCOUNTS, None)
         ), patch.object(
@@ -337,12 +666,15 @@ class SocialApiTests(TestCase):
         ):
             response = self.client.post(
                 "/api/social/admin/posts/create",
-                data=json.dumps({"caption": "Launching today!"}),
+                data=json.dumps({"caption": "Launching today!", "media_items": media_items}),
                 content_type="application/json",
                 **self._auth(self.admin),
             )
         self.assertEqual(response.status_code, 201)
-        self.assertEqual(response.json()["data"]["status"], "sent")
+        data = response.json()["data"]
+        self.assertEqual(data["status"], "sent")
+        self.assertEqual(data["media_items"], media_items)
+        self.assertEqual(data["image_url"], "https://cdn.example.com/photo.jpg")
 
     @configured
     def test_approve_endpoint(self):
@@ -399,7 +731,15 @@ class SocialApiTests(TestCase):
                 **self._auth(self.admin),
             )
         self.assertEqual(response.status_code, 200)
-        mock_reply.assert_called_once_with("zp_3", "c1", "Thanks!")
+        mock_reply.assert_called_once_with(
+            "zp_3",
+            "c1",
+            "Thanks!",
+            account_id="acc_test",
+            parent_cid=None,
+            root_uri=None,
+            root_cid=None,
+        )
 
     @configured
     def test_message_send_flow(self):
@@ -408,9 +748,9 @@ class SocialApiTests(TestCase):
         ) as mock_send:
             response = self.client.post(
                 "/api/social/admin/inbox/conversations/conv_1/send",
-                data=json.dumps({"message": "Hello there"}),
+                data=json.dumps({"message": "Hello there", "account_id": "acc_1"}),
                 content_type="application/json",
                 **self._auth(self.admin),
             )
         self.assertEqual(response.status_code, 200)
-        mock_send.assert_called_once_with("conv_1", "Hello there")
+        mock_send.assert_called_once_with("conv_1", "Hello there", account_id="acc_1")

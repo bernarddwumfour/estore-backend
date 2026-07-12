@@ -64,6 +64,36 @@ class SocialMediaLibraryTests(TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["data"]["media_type"], "video")
 
+    def test_upload_multiple_files(self):
+        response = self.client.post(
+            "/api/social/admin/media/upload",
+            {
+                "files": [
+                    SimpleUploadedFile("banner.gif", GIF_BYTES, content_type="image/gif"),
+                    SimpleUploadedFile("clip.mp4", b"fake-video-bytes", content_type="video/mp4"),
+                ]
+            },
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 201)
+        data = response.json()["data"]
+        self.assertEqual(len(data["media"]), 2)
+        self.assertEqual({item["media_type"] for item in data["media"]}, {"image", "video"})
+        self.assertEqual(SocialMedia.objects.count(), 2)
+
+    def test_upload_multiple_rejects_too_many_files(self):
+        files = [
+            SimpleUploadedFile(f"banner-{index}.gif", GIF_BYTES, content_type="image/gif")
+            for index in range(11)
+        ]
+        response = self.client.post(
+            "/api/social/admin/media/upload",
+            {"files": files},
+            **self._auth(),
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(SocialMedia.objects.count(), 0)
+
     def test_upload_invalid_extension(self):
         response = self._upload("malware.exe", b"nope", "application/octet-stream")
         self.assertEqual(response.status_code, 400)

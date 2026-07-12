@@ -28,33 +28,33 @@ ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv(
 RATELIMIT_ENABLE = True
 
 
-PAYSTACK_SECRET_KEY = os.environ.get('PAYSTACK_SECRET_KEY', '')
-PAYSTACK_PUBLIC_KEY = os.environ.get('PAYSTACK_PUBLIC_KEY', '')
+PAYSTACK_SECRET_KEY = config("PAYSTACK_SECRET_KEY", default="")
+PAYSTACK_PUBLIC_KEY = config("PAYSTACK_PUBLIC_KEY", default="")
 PAYSTACK_BASE_URL = 'https://api.paystack.co'  # Production URL (same for test keys)
 
-PAYSTACK_WEBHOOK_SECRET = os.environ.get('PAYSTACK_WEBHOOK_SECRET', '')
+PAYSTACK_WEBHOOK_SECRET = config("PAYSTACK_WEBHOOK_SECRET", default="")
 
-PAYSTACK_CALLBACK_URL = os.environ.get('PAYSTACK_CALLBACK_URL', 'http://localhost:3000/orders/callback')
-PAYMENT_SUCCESS_URL = os.environ.get('PAYMENT_SUCCESS_URL', 'http://localhost:3000/orders/success')
-PAYMENT_CANCEL_URL = os.environ.get('PAYMENT_CANCEL_URL', 'http://localhost:3000/orders/cancel')
+PAYSTACK_CALLBACK_URL = config("PAYSTACK_CALLBACK_URL", default="http://localhost:3000/orders/callback")
+PAYMENT_SUCCESS_URL = config("PAYMENT_SUCCESS_URL", default="http://localhost:3000/orders/success")
+PAYMENT_CANCEL_URL = config("PAYMENT_CANCEL_URL", default="http://localhost:3000/orders/cancel")
 
-AFFILIATE_CODE_DISCOUNT_TYPE = os.environ.get("AFFILIATE_CODE_DISCOUNT_TYPE", "percentage")
-AFFILIATE_CODE_DISCOUNT_VALUE = os.environ.get("AFFILIATE_CODE_DISCOUNT_VALUE", "5.00")
-AFFILIATE_COMMISSION_BASE = os.environ.get("AFFILIATE_COMMISSION_BASE", "discounted_subtotal")
+AFFILIATE_CODE_DISCOUNT_TYPE = config("AFFILIATE_CODE_DISCOUNT_TYPE", default="percentage")
+AFFILIATE_CODE_DISCOUNT_VALUE = config("AFFILIATE_CODE_DISCOUNT_VALUE", default="5.00")
+AFFILIATE_COMMISSION_BASE = config("AFFILIATE_COMMISSION_BASE", default="discounted_subtotal")
 # APPLICATIONS
 
-TERMINAL_AFRICA_API_KEY = os.environ.get('TERMINAL_AFRICA_API_KEY', '')
-TERMINAL_AFRICA_BASE_URL = os.environ.get('TERMINAL_AFRICA_BASE_URL', 'https://api.terminal.africa/v1')
-TERMINAL_AFRICA_WEBHOOK_SECRET = os.environ.get('TERMINAL_AFRICA_WEBHOOK_SECRET', '')
+TERMINAL_AFRICA_API_KEY = config("TERMINAL_AFRICA_API_KEY", default="")
+TERMINAL_AFRICA_BASE_URL = config("TERMINAL_AFRICA_BASE_URL", default="https://api.terminal.africa/v1")
+TERMINAL_AFRICA_WEBHOOK_SECRET = config("TERMINAL_AFRICA_WEBHOOK_SECRET", default="")
 
 
-ZERNIO_API_KEY = os.environ.get('ZERNIO_API_KEY', '')
-ZERNIO_BASE_URL = os.environ.get('ZERNIO_BASE_URL', 'https://zernio.com/api/v1')
+ZERNIO_API_KEY = config("ZERNIO_API_KEY", default="")
+ZERNIO_BASE_URL = config("ZERNIO_BASE_URL", default="https://zernio.com/api/v1")
 # Optional comma-separated platform filter, e.g. "instagram,twitter". Empty = all connected accounts.
-ZERNIO_PLATFORMS = [p.strip() for p in os.environ.get('ZERNIO_PLATFORMS', '').split(',') if p.strip()]
+ZERNIO_PLATFORMS = [p.strip() for p in config("ZERNIO_PLATFORMS", default="").split(",") if p.strip()]
 
 # Public storefront base URL used in social post captions
-STOREFRONT_BASE_URL = os.environ.get('STOREFRONT_BASE_URL', 'http://localhost:3000')
+STOREFRONT_BASE_URL = config("STOREFRONT_BASE_URL", default="http://localhost:3000")
 
 # Default shipping origin (warehouse address)
 DEFAULT_SHIPPING_ORIGIN = {
@@ -67,17 +67,17 @@ DEFAULT_SHIPPING_ORIGIN = {
 
 # Store Address Configuration (for POS in-store pickup)
 STORE_ADDRESS = {
-    'first_name': os.environ.get('STORE_ADDRESS_FIRST_NAME', 'Store'),
-    'last_name': os.environ.get('STORE_ADDRESS_LAST_NAME', 'Pickup'),
-    'email': os.environ.get('STORE_ADDRESS_EMAIL', 'store@example.com'),
-    'phone': os.environ.get('STORE_ADDRESS_PHONE', '+233000000000'),
-    'address_line1': os.environ.get('STORE_ADDRESS_LINE1', '123 Main Street'),
-    'address_line2': os.environ.get('STORE_ADDRESS_LINE2', ''),
-    'city': os.environ.get('STORE_ADDRESS_CITY', 'Accra'),
-    'state': os.environ.get('STORE_ADDRESS_STATE', 'Greater Accra'),
-    'postal_code': os.environ.get('STORE_ADDRESS_POSTAL_CODE', 'GA-123'),
-    'country': os.environ.get('STORE_ADDRESS_COUNTRY', 'GH'),
-    'instructions': os.environ.get('STORE_ADDRESS_INSTRUCTIONS', 'In-Store Pickup'),
+    'first_name': config("STORE_ADDRESS_FIRST_NAME", default="Store"),
+    'last_name': config("STORE_ADDRESS_LAST_NAME", default="Pickup"),
+    'email': config("STORE_ADDRESS_EMAIL", default="store@example.com"),
+    'phone': config("STORE_ADDRESS_PHONE", default="+233000000000"),
+    'address_line1': config("STORE_ADDRESS_LINE1", default="123 Main Street"),
+    'address_line2': config("STORE_ADDRESS_LINE2", default=""),
+    'city': config("STORE_ADDRESS_CITY", default="Accra"),
+    'state': config("STORE_ADDRESS_STATE", default="Greater Accra"),
+    'postal_code': config("STORE_ADDRESS_POSTAL_CODE", default="GA-123"),
+    'country': config("STORE_ADDRESS_COUNTRY", default="GH"),
+    'instructions': config("STORE_ADDRESS_INSTRUCTIONS", default="In-Store Pickup"),
 }
 
 # Cache backend.
@@ -155,7 +155,6 @@ INSTALLED_APPS = [
     "apps.promotions",
     "apps.marketing",
     "apps.social",
-    "api",
 ]
 
 for optional_app in ["cloudinary_storage", "django.contrib.staticfiles", "cloudinary"]:
@@ -232,7 +231,7 @@ TEMPLATES = [
 
 # SSL is required for Neon in production; disable for local/sqlite test runs via
 # DB_SSL_REQUIRE=False (sqlite rejects the sslmode option).
-DATABASE_URL = os.environ.get('DATABASE_URL')
+DATABASE_URL = config("DATABASE_URL", default="")
 DB_SSL_REQUIRE = config(
     "DB_SSL_REQUIRE",
     default=bool(DATABASE_URL and not DATABASE_URL.startswith("sqlite")),
@@ -423,22 +422,20 @@ LOGGING = {
 
 
 # Email Configuration (Resend)
-RESEND_API_KEY = os.getenv("RESEND_API_KEY", "").strip()
-DEFAULT_FROM_EMAIL = os.getenv("SENDER_EMAIL", "").strip()
+RESEND_API_KEY = config("RESEND_API_KEY", default="").strip()
+DEFAULT_FROM_EMAIL = config("SENDER_EMAIL", default="").strip()
 
 # App Configuration
-SITE_NAME = os.getenv("SITE_NAME", "API Service")
-DEFAULT_FROM_NAME = os.getenv("DEFAULT_FROM_NAME", SITE_NAME)
+SITE_NAME = config("SITE_NAME", default="API Service")
+DEFAULT_FROM_NAME = config("DEFAULT_FROM_NAME", default=SITE_NAME)
 
 # Email Verification
 EMAIL_VERIFICATION_EXPIRY_HOURS = 24
-DISABLE_EMAIL_VERIFICATION = (
-    os.getenv("DISABLE_EMAIL_VERIFICATION", "False").lower() == "true"
-)
+DISABLE_EMAIL_VERIFICATION = config("DISABLE_EMAIL_VERIFICATION", default=False, cast=bool)
 
 # API Domain
-DOMAIN_NAME = os.getenv("DOMAIN_NAME", "localhost:8000")
-USE_HTTPS = os.getenv("USE_HTTPS", "False").lower() == "true"
+DOMAIN_NAME = config("DOMAIN_NAME", default="localhost:8000")
+USE_HTTPS = config("USE_HTTPS", default=False, cast=bool)
 
 
 # Base URL to serve media files from

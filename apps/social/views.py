@@ -32,6 +32,28 @@ logger = logging.getLogger(__name__)
 APP_NAME = "social"
 
 
+def _first_post_account_id(post):
+    """Return the first account id from a saved Zernio platforms payload."""
+    for platform in post.platforms or []:
+        if not isinstance(platform, dict):
+            continue
+        account_id = platform.get("accountId") or platform.get("account_id")
+        if account_id:
+            return str(account_id)
+    return None
+
+
+def _post_account_id_from_request(request, post, cleaned=None):
+    """Prefer an explicit account id, then fall back to the post target."""
+    cleaned = cleaned or {}
+    return (
+        cleaned.get("account_id")
+        or request.GET.get("account_id")
+        or request.GET.get("accountId")
+        or _first_post_account_id(post)
+    )
+
+
 @csrf_exempt
 @require_http_methods(["GET"])
 @ratelimit(key='ip', rate='300/h', method='GET', block=True)
@@ -250,7 +272,10 @@ def admin_social_post_analytics(request, post_id):
         if not post.zernio_post_id:
             return APIResponse.bad_request("This post has not been published yet")
 
-        analytics, error = ZernioService.get_post_analytics(post.zernio_post_id)
+        account_id = _post_account_id_from_request(request, post)
+        analytics, error = ZernioService.get_post_analytics(
+            post.zernio_post_id, account_id=account_id
+        )
         if error:
             return APIResponse.bad_request(error)
 
@@ -277,7 +302,10 @@ def admin_social_post_comments(request, post_id):
         if not post.zernio_post_id:
             return APIResponse.bad_request("This post has not been published yet")
 
-        comments, error = ZernioService.list_post_comments(post.zernio_post_id)
+        account_id = _post_account_id_from_request(request, post)
+        comments, error = ZernioService.list_post_comments(
+            post.zernio_post_id, account_id=account_id
+        )
         if error:
             return APIResponse.bad_request(error)
 
@@ -309,8 +337,15 @@ def admin_social_comment_reply(request, post_id):
         if errors:
             return APIResponse.validation_error(errors)
 
+        account_id = _post_account_id_from_request(request, post, cleaned)
         result, error = ZernioService.reply_comment(
-            post.zernio_post_id, cleaned["comment_id"], cleaned["message"]
+            post.zernio_post_id,
+            cleaned["comment_id"],
+            cleaned["message"],
+            account_id=account_id,
+            parent_cid=cleaned.get("parent_cid"),
+            root_uri=cleaned.get("root_uri"),
+            root_cid=cleaned.get("root_cid"),
         )
         if error:
             return APIResponse.bad_request(error)
@@ -340,8 +375,14 @@ def admin_social_comment_action(request, post_id):
         if errors:
             return APIResponse.validation_error(errors)
 
+        account_id = _post_account_id_from_request(request, post, cleaned)
         result, error = ZernioService.comment_action(
-            post.zernio_post_id, cleaned["comment_id"], cleaned["action"]
+            post.zernio_post_id,
+            cleaned["comment_id"],
+            cleaned["action"],
+            account_id=account_id,
+            cid=cleaned.get("cid"),
+            like_uri=cleaned.get("like_uri"),
         )
         if error:
             return APIResponse.bad_request(error)
@@ -388,7 +429,10 @@ def admin_social_messages(request, conversation_id):
         if not ZernioService.is_configured():
             return APIResponse.service_unavailable("Social media service not configured")
 
-        messages, error = ZernioService.list_messages(conversation_id)
+        account_id = request.GET.get("account_id") or request.GET.get("accountId")
+        messages, error = ZernioService.list_messages(
+            conversation_id, account_id=account_id
+        )
         if error:
             return APIResponse.bad_request(error)
 
@@ -417,7 +461,9 @@ def admin_social_message_send(request, conversation_id):
         if errors:
             return APIResponse.validation_error(errors)
 
-        result, error = ZernioService.send_message(conversation_id, cleaned["message"])
+        result, error = ZernioService.send_message(
+            conversation_id, cleaned["message"], account_id=cleaned["account_id"]
+        )
         if error:
             return APIResponse.bad_request(error)
 
@@ -736,6 +782,7 @@ IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp"}
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".webm"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
 MAX_VIDEO_SIZE = 50 * 1024 * 1024
+MAX_MEDIA_UPLOAD_FILES = 10
 
 
 @csrf_exempt
@@ -744,54 +791,74 @@ MAX_VIDEO_SIZE = 50 * 1024 * 1024
 @role_required("admin", "staff")
 @ratelimit(key='user', rate='60/h', method='POST', block=True)
 def admin_social_media_upload(request):
-    """Admin: upload an image or video to the social media library."""
+    """Admin: upload one or more images/videos to the social media library."""
     import os as os_module
     from apps.social.models import SocialMedia
     from apps.social.schemas import serialize_social_media
 
     try:
-        if "file" not in request.FILES:
+        uploads = request.FILES.getlist("files") or request.FILES.getlist("file")
+        if not uploads:
             return APIResponse.bad_request("No file provided")
-
-        upload = request.FILES["file"]
-        ext = os_module.path.splitext(upload.name)[1].lower()
-
-        if ext in IMAGE_EXTENSIONS:
-            media_type = SocialMedia.TYPE_IMAGE
-            max_size = MAX_IMAGE_SIZE
-        elif ext in VIDEO_EXTENSIONS:
-            media_type = SocialMedia.TYPE_VIDEO
-            max_size = MAX_VIDEO_SIZE
-        else:
-            allowed = ", ".join(sorted(IMAGE_EXTENSIONS | VIDEO_EXTENSIONS))
-            return APIResponse.bad_request(f"Invalid file type. Allowed: {allowed}")
-
-        if upload.size > max_size:
-            limit_mb = max_size // (1024 * 1024)
+        if len(uploads) > MAX_MEDIA_UPLOAD_FILES:
             return APIResponse.bad_request(
-                f"File too large. Maximum size for {media_type}s is {limit_mb}MB"
+                f"Upload up to {MAX_MEDIA_UPLOAD_FILES} files at a time"
             )
 
-        media = SocialMedia.objects.create(
-            file=upload,
-            media_type=media_type,
-            name=upload.name[:200],
-            uploaded_by=request.user,
-        )
+        validated_uploads = []
+        for upload in uploads:
+            ext = os_module.path.splitext(upload.name)[1].lower()
+
+            if ext in IMAGE_EXTENSIONS:
+                media_type = SocialMedia.TYPE_IMAGE
+                max_size = MAX_IMAGE_SIZE
+            elif ext in VIDEO_EXTENSIONS:
+                media_type = SocialMedia.TYPE_VIDEO
+                max_size = MAX_VIDEO_SIZE
+            else:
+                allowed = ", ".join(sorted(IMAGE_EXTENSIONS | VIDEO_EXTENSIONS))
+                return APIResponse.bad_request(
+                    f"Invalid file type for {upload.name}. Allowed: {allowed}"
+                )
+
+            if upload.size > max_size:
+                limit_mb = max_size // (1024 * 1024)
+                return APIResponse.bad_request(
+                    f"{upload.name} is too large. Maximum size for {media_type}s is {limit_mb}MB"
+                )
+            validated_uploads.append((upload, media_type))
+
+        created_media = []
+        for upload, media_type in validated_uploads:
+            media = SocialMedia.objects.create(
+                file=upload,
+                media_type=media_type,
+                name=upload.name[:200],
+                uploaded_by=request.user,
+            )
+            created_media.append(media)
 
         log_action(
             logger=logger,
             severity=LogSeverity.INFO,
             action="social_media_upload",
-            description=f"Social media uploaded: {media.name}",
+            description=f"{len(created_media)} social media file(s) uploaded",
             status_code=201,
             user=request.user,
             request=request,
             app_name=APP_NAME,
-            extra={"media_id": str(media.id), "media_type": media_type},
+            extra={
+                "media_ids": [str(media.id) for media in created_media],
+                "count": len(created_media),
+            },
         )
+        if len(created_media) == 1:
+            return APIResponse.created(
+                data=serialize_social_media(created_media[0]),
+                message="Media uploaded successfully",
+            )
         return APIResponse.created(
-            data=serialize_social_media(media),
+            data={"media": [serialize_social_media(media) for media in created_media]},
             message="Media uploaded successfully",
         )
     except Exception as e:

@@ -15,9 +15,9 @@ from apps.users.decorators.auth import (
 from estore.utils.responses import APIResponse
 from ..services.product_service import (
     ProductService,
-    WishlistService,
     AdminProductService,
 )
+from ..services.wishlist_service import WishlistService
 from ..schemas import validate_variant_create, validate_variant_update, serialize_variant
 from ..models import ProductVariant
 from apps.common.utils import sanitize_search_query

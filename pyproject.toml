@@ -1,0 +1,48 @@
+[tool.ruff]
+# Target Python version
+target-version = "py311"
+
+# Directories to exclude
+exclude = [
+    "migrations/",
+    "__pycache__/",
+    ".git/",
+    "venv/",
+    "django_ratelimit/",
+    "api/",          # dead / legacy app — remove in cleanup pass
+]
+
+# Line length (match Django convention)
+line-length = 100
+
+[tool.ruff.lint]
+# Selected rule sets that catch real bugs/style issues without noise
+select = [
+    "E",      # pycodestyle errors
+    "F",      # pyflakes (unused imports, undefined names, etc.)
+    "W",      # pycodestyle warnings
+    "I",      # isort (import ordering)
+    "B",      # flake8-bugbear (common gotchas)
+    "C4",     # flake8-comprehensions
+    "SIM",    # flake8-simplify
+    "TCH",    # flake8-type-checking
+    "RUF",    # ruff-specific rules
+]
+
+ignore = [
+    "E501",   # line-too-long — let the formatter handle it
+    "B008",   # function-call-in-default-arg — Django field defaults need this
+    "SIM108", # use-ternary-operator — sometimes if/else is clearer
+    "RUF012", # mutable-class-default — Django Model field shadowing
+]
+
+[tool.ruff.lint.isort]
+# Group imports: standard library, third-party, first-party (local)
+known-first-party = ["apps", "common", "estore"]
+force-sort-within-sections = true
+
+[tool.ruff.format]
+# Match existing code style in the codebase
+quote-style = "double"
+indent-style = "space"
+docstring-code-format = true

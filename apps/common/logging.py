@@ -25,6 +25,8 @@ def get_user_info(user: Any) -> str:
         return "anonymous"
     if isinstance(user, AnonymousUser):
         return "anonymous"
+    if isinstance(user, dict):
+        return user.get('email') or (str(user['id']) if user.get('id') else 'unknown')
     if hasattr(user, 'email') and user.email:
         return user.email
     if hasattr(user, 'id'):

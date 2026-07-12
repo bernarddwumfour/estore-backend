@@ -51,6 +51,8 @@ class SocialPost(models.Model):
 
     caption = models.TextField(_("caption"))
     image_url = models.URLField(_("image URL"), max_length=500, blank=True)
+    # Canonical media payload sent to Zernio: [{"type": "image|video", "url": ..., "title": ...}]
+    media_items = models.JSONField(_("media items"), default=list, blank=True)
     # List of {"platform": ..., "accountId": ...} dicts sent to Zernio
     platforms = models.JSONField(_("platforms"), default=list, blank=True)
 

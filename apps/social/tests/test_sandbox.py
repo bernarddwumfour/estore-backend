@@ -74,6 +74,21 @@ class SandboxModeTests(TestCase):
         by_id = {c["_id"]: c for c in remaining}
         self.assertFalse(by_id[comments[0]["_id"]]["hidden"])
 
+    def test_create_post_accepts_media_items(self):
+        media_items = [
+            {"type": "image", "url": "https://cdn.example.com/photo.jpg"},
+            {"type": "video", "url": "https://cdn.example.com/reel.mp4"},
+        ]
+        result, error = ZernioService.create_post(
+            "Sandbox media",
+            [{"platform": "instagram", "accountId": "acc_test"}],
+            media_items=media_items,
+        )
+
+        self.assertIsNone(error)
+        self.assertTrue(result["_id"].startswith("sandbox_"))
+        self.assertEqual(result["mediaItems"], media_items)
+
     def test_conversations_and_messages_flow(self):
         conversations, error = ZernioService.list_conversations()
         self.assertIsNone(error)
@@ -319,9 +334,10 @@ class SandboxConfigManagementTests(TestCase):
         self.assertEqual(response.status_code, 422)
 
     def test_connect_endpoint_test_mode(self):
+        profiles, _ = ZernioService.list_profiles()
         response = self.client.post(
             "/api/social/admin/accounts/connect",
-            data=json.dumps({"platform": "pinterest"}),
+            data=json.dumps({"platform": "pinterest", "profile_id": profiles[0]["_id"]}),
             content_type="application/json",
             **self._auth(),
         )

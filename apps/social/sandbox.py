@@ -158,6 +158,8 @@ class SandboxSocialService:
             "posts_this_month": posts_sent,
             "posts_limit": 500,
             "profiles": SandboxProfile.objects.count(),
+            "uploads": 0,
+            "uploads_limit": 100,
         }, None
 
     @classmethod
@@ -177,6 +179,7 @@ class SandboxSocialService:
         content: str,
         platforms: List[Dict[str, str]],
         media_urls: Optional[List[str]] = None,
+        media_items: Optional[List[Dict[str, str]]] = None,
         scheduled_for: Optional[str] = None,
         timezone_name: Optional[str] = None,
     ) -> Tuple[Optional[Dict], Optional[str]]:
@@ -188,7 +191,11 @@ class SandboxSocialService:
             SandboxComment.objects.create(
                 zernio_post_id=post_id, author=author, message=message
             )
-        return {"_id": post_id, "status": "published"}, None
+        return {
+            "_id": post_id,
+            "status": "published",
+            "mediaItems": media_items or media_urls or [],
+        }, None
 
     @classmethod
     def delete_post(cls, post_id: str) -> Tuple[Optional[Dict], Optional[str]]:
@@ -280,6 +287,7 @@ class SandboxSocialService:
                 "_id": str(c.id),
                 "name": c.name,
                 "platform": c.platform,
+                "accountId": f"sandbox_{c.platform}",
                 "lastMessage": last.message if last else "",
                 "lastMessageAt": last.created_at.isoformat() if last else c.created_at.isoformat(),
                 "lastMessageIsOwn": last.is_outgoing if last else False,
