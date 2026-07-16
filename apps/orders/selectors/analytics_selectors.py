@@ -3,8 +3,8 @@ Order Analytics Selectors - Database read operations for order analytics
 No business logic - just queries
 """
 
-from django.db.models import Sum, Count, Avg, Q, F, Min, Max, DecimalField, IntegerField, FloatField, ExpressionWrapper
-from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, Coalesce
+from django.db.models import Sum, Count, Avg, Q, F, Min, Max, DecimalField, IntegerField, FloatField, DurationField, ExpressionWrapper
+from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, Coalesce, ExtractHour, ExtractWeekDay
 from django.utils import timezone
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -59,17 +59,18 @@ class OrderAnalyticsSelector:
             total=Coalesce(Sum('quantity'), 0, output_field=IntegerField())
         )['total'] or 0
         
-        # Payment method distribution
+        # Payment method distribution (single grouped query instead of one query per method)
         payment_method_stats = {}
-        for method_code, method_name in Order.PAYMENT_METHOD_CHOICES:
-            count = queryset.filter(payment_method=method_code).count()
+        payment_method_agg = queryset.values('payment_method').annotate(
+            count=Count('id'),
+            total=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
+        )
+        for row in payment_method_agg:
+            count = row['count']
             if count > 0:
-                revenue = queryset.filter(payment_method=method_code).aggregate(
-                    total=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
-                )['total'] or Decimal('0.00')
-                payment_method_stats[method_code] = {
+                payment_method_stats[row['payment_method']] = {
                     "count": count,
-                    "revenue": float(revenue),
+                    "revenue": float(row['total']),
                     "percentage": round(count / total_orders * 100, 2) if total_orders > 0 else 0
                 }
         
@@ -169,16 +170,18 @@ class OrderAnalyticsSelector:
             queryset = queryset.filter(created_at__lte=end_date)
         
         total = queryset.count()
+        status_labels = dict(Order.STATUS_CHOICES)
         status_distribution = {}
-        for status_code, status_label in Order.STATUS_CHOICES:
-            count = queryset.filter(status=status_code).count()
+        status_counts = queryset.values('status').annotate(count=Count('id'))
+        for row in status_counts:
+            count = row['count']
             if count > 0:
-                status_distribution[status_code] = {
+                status_distribution[row['status']] = {
                     "count": count,
-                    "label": status_label,
+                    "label": status_labels.get(row['status'], row['status']),
                     "percentage": round(count / total * 100, 2) if total > 0 else 0
                 }
-        
+
         return status_distribution
     
     @staticmethod
@@ -196,16 +199,18 @@ class OrderAnalyticsSelector:
             queryset = queryset.filter(created_at__lte=end_date)
         
         total = queryset.count()
+        payment_status_labels = dict(Order.PAYMENT_STATUS_CHOICES)
         payment_distribution = {}
-        for status_code, status_label in Order.PAYMENT_STATUS_CHOICES:
-            count = queryset.filter(payment_status=status_code).count()
+        payment_status_counts = queryset.values('payment_status').annotate(count=Count('id'))
+        for row in payment_status_counts:
+            count = row['count']
             if count > 0:
-                payment_distribution[status_code] = {
+                payment_distribution[row['payment_status']] = {
                     "count": count,
-                    "label": status_label,
+                    "label": payment_status_labels.get(row['payment_status'], row['payment_status']),
                     "percentage": round(count / total * 100, 2) if total > 0 else 0
                 }
-        
+
         return payment_distribution
     
     @staticmethod
@@ -306,27 +311,25 @@ class OrderAnalyticsSelector:
                 "percentage": round(item['count'] / total_orders * 100, 2) if total_orders > 0 else 0
             })
         
-        # Fulfillment time (time from order to shipment)
-        fulfilled_orders = queryset.filter(shipped_at__isnull=False)
-        avg_fulfillment_days = 0
-        if fulfilled_orders.exists():
-            fulfillment_times = []
-            for order in fulfilled_orders:
-                if order.created_at and order.shipped_at:
-                    delta = order.shipped_at - order.created_at
-                    fulfillment_times.append(delta.total_seconds() / 86400)
-            avg_fulfillment_days = round(sum(fulfillment_times) / len(fulfillment_times), 2) if fulfillment_times else 0
-        
-        # Delivery time (time from shipment to delivery)
-        delivered_orders = queryset.filter(delivered_at__isnull=False)
-        avg_delivery_days = 0
-        if delivered_orders.exists():
-            delivery_times = []
-            for order in delivered_orders:
-                if order.shipped_at and order.delivered_at:
-                    delta = order.delivered_at - order.shipped_at
-                    delivery_times.append(delta.total_seconds() / 86400)
-            avg_delivery_days = round(sum(delivery_times) / len(delivery_times), 2) if delivery_times else 0
+        # Fulfillment time (time from order to shipment) - computed DB-side via Avg on a
+        # duration expression instead of pulling every order into Python.
+        fulfillment_avg = queryset.filter(shipped_at__isnull=False).aggregate(
+            avg_duration=Avg(
+                ExpressionWrapper(F('shipped_at') - F('created_at'), output_field=DurationField())
+            )
+        )['avg_duration']
+        avg_fulfillment_days = round(fulfillment_avg.total_seconds() / 86400, 2) if fulfillment_avg else 0
+
+        # Delivery time (time from shipment to delivery). Original loop only counted
+        # orders that had both shipped_at and delivered_at set, so filter both here too.
+        delivery_avg = queryset.filter(
+            shipped_at__isnull=False, delivered_at__isnull=False
+        ).aggregate(
+            avg_duration=Avg(
+                ExpressionWrapper(F('delivered_at') - F('shipped_at'), output_field=DurationField())
+            )
+        )['avg_duration']
+        avg_delivery_days = round(delivery_avg.total_seconds() / 86400, 2) if delivery_avg else 0
         
         # Orders by fulfillment status
         fulfillment_status = {
@@ -378,28 +381,34 @@ class OrderAnalyticsSelector:
             total=Coalesce(Sum('amount'), Decimal('0.00'), output_field=DecimalField())
         )['total'] or Decimal('0.00')
         
-        # Refund reasons
+        # Refund reasons - single grouped query instead of loading every transaction
         refund_reasons = {}
-        for trans in refund_transactions:
-            reason = trans.refund_reason or "No reason provided"
+        refund_reason_agg = refund_transactions.values('refund_reason').annotate(
+            count=Count('id'),
+            amount=Coalesce(Sum('amount'), Decimal('0.00'), output_field=DecimalField())
+        )
+        refund_transactions_count = 0
+        for row in refund_reason_agg:
+            reason = row['refund_reason'] or "No reason provided"
             if reason not in refund_reasons:
                 refund_reasons[reason] = {"count": 0, "amount": Decimal('0.00')}
-            refund_reasons[reason]["count"] += 1
-            refund_reasons[reason]["amount"] += trans.amount
-        
+            refund_reasons[reason]["count"] += row['count']
+            refund_reasons[reason]["amount"] += row['amount']
+            refund_transactions_count += row['count']
+
         # Refund rate
         total_revenue = queryset.filter(payment_status=Order.PAYMENT_PAID).aggregate(
             total=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
         )['total'] or Decimal('0.00')
         refund_rate = (float(total_refunded) / float(total_revenue) * 100) if total_revenue > 0 else 0
-        
+
         return {
             "summary": {
                 "refunded_orders": refunded_count,
                 "refunded_amount": float(refunded_amount),
                 "total_refunded": float(total_refunded),
                 "refund_rate": round(refund_rate, 2),
-                "refund_transactions": refund_transactions.count(),
+                "refund_transactions": refund_transactions_count,
             },
             "refund_reasons": [
                 {"reason": reason, "count": data["count"], "amount": float(data["amount"])}
@@ -470,22 +479,27 @@ class OrderAnalyticsSelector:
         if end_date:
             queryset = queryset.filter(created_at__lte=end_date)
         
-        # Hourly distribution (0-23)
+        # Hourly distribution (0-23) - single grouped query instead of one pair of
+        # queries per hour.
+        hourly_agg = queryset.annotate(
+            hour=ExtractHour('created_at')
+        ).values('hour').annotate(
+            orders=Count('id'),
+            revenue=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
+        ).order_by('hour')
+
         hourly_data = []
-        for hour in range(24):
-            count = queryset.filter(created_at__hour=hour).count()
-            revenue = queryset.filter(created_at__hour=hour).aggregate(
-                total=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
-            )['total'] or Decimal('0.00')
-            
+        for row in hourly_agg:
+            count = row['orders']
+            revenue = row['revenue']
             if count > 0 or revenue > 0:
                 hourly_data.append({
-                    "hour": hour,
+                    "hour": row['hour'],
                     "orders": count,
                     "revenue": float(revenue),
-                    "display_hour": f"{hour}:00",
+                    "display_hour": f"{row['hour']}:00",
                 })
-        
+
         return hourly_data
     
     @staticmethod
@@ -505,13 +519,23 @@ class OrderAnalyticsSelector:
         days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
         total = queryset.count()
         result = []
-        
+
+        # Single grouped query instead of one pair of queries per day. ExtractWeekDay
+        # uses the same convention as the __week_day lookup (Sunday=1 ... Saturday=7),
+        # so we key the lookup the same way the original per-day loop did (idx + 2).
+        weekday_agg = queryset.annotate(
+            weekday=ExtractWeekDay('created_at')
+        ).values('weekday').annotate(
+            orders=Count('id'),
+            revenue=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
+        )
+        weekday_map = {row['weekday']: row for row in weekday_agg}
+
         for idx, day in enumerate(days):
-            count = queryset.filter(created_at__week_day=idx + 2).count()  # Monday = 2 in Django
-            revenue = queryset.filter(created_at__week_day=idx + 2).aggregate(
-                total=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
-            )['total'] or Decimal('0.00')
-            
+            row = weekday_map.get(idx + 2)  # Monday = 2 in Django
+            count = row['orders'] if row else 0
+            revenue = row['revenue'] if row else Decimal('0.00')
+
             result.append({
                 "day": day,
                 "day_index": idx,
@@ -519,5 +543,5 @@ class OrderAnalyticsSelector:
                 "revenue": float(revenue),
                 "percentage": round(count / total * 100, 2) if total > 0 else 0,
             })
-        
+
         return result

@@ -3,9 +3,15 @@ Order Analytics Views - API views for order analytics endpoints
 """
 
 import logging
+import time
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
+from django_ratelimit.decorators import ratelimit
 from estore.utils.responses import APIResponse
+
+from apps.users.decorators.auth import jwt_required, role_required
+from apps.common.logging import log_analytics_request
+from apps.common.analytics_cache import cached_analytics
 
 from apps.orders.selectors.analytics_selectors import OrderAnalyticsSelector
 from apps.orders.schemas.analytics_schemas import (
@@ -26,11 +32,18 @@ from apps.orders.schemas.analytics_schemas import (
 
 logger = logging.getLogger(__name__)
 
+APP_NAME = "orders"
+
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def order_analytics_summary(request):
     """Get order analytics summary"""
+    start_time = time.time()
+    action = "order_analytics_summary"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -39,9 +52,10 @@ def order_analytics_summary(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_order_summary_stats(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_order_summary_stats(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_order_summary_stats(data)
@@ -53,15 +67,22 @@ def order_analytics_summary(request):
         
     except Exception as e:
         logger.error(f"Order analytics summary error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def sales_trends_analytics(request):
     """Get sales trends over time"""
+    start_time = time.time()
+    action = "sales_trends_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -75,10 +96,10 @@ def sales_trends_analytics(request):
         if interval_error:
             return APIResponse.bad_request(interval_error["error"])
         
-        data = OrderAnalyticsSelector.get_sales_trends(
-            start_date=start_date,
-            end_date=end_date,
-            interval=interval
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_sales_trends(start_date=start_date, end_date=end_date, interval=interval),
+            start_date=start_date_str, end_date=end_date_str, interval=interval_str,
         )
         
         serialized_data = serialize_sales_trends(data)
@@ -90,13 +111,22 @@ def sales_trends_analytics(request):
         
     except Exception as e:
         logger.error(f"Sales trends error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def order_status_distribution_analytics(request):
     """Get order status distribution"""
+    start_time = time.time()
+    action = "order_status_distribution_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -105,9 +135,10 @@ def order_status_distribution_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_order_status_distribution(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_order_status_distribution(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_status_distribution(data)
@@ -119,13 +150,22 @@ def order_status_distribution_analytics(request):
         
     except Exception as e:
         logger.error(f"Order status distribution error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def payment_status_distribution_analytics(request):
     """Get payment status distribution"""
+    start_time = time.time()
+    action = "payment_status_distribution_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -134,9 +174,10 @@ def payment_status_distribution_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_payment_status_distribution(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_payment_status_distribution(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_payment_status_distribution(data)
@@ -148,13 +189,22 @@ def payment_status_distribution_analytics(request):
         
     except Exception as e:
         logger.error(f"Payment status distribution error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def top_customers_analytics(request):
     """Get top customers by total spent"""
+    start_time = time.time()
+    action = "top_customers_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -168,10 +218,10 @@ def top_customers_analytics(request):
         if limit_error:
             return APIResponse.bad_request(limit_error["error"])
         
-        data = OrderAnalyticsSelector.get_top_customers(
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_top_customers(start_date=start_date, end_date=end_date, limit=limit),
+            start_date=start_date_str, end_date=end_date_str, limit=limit_str,
         )
         
         serialized_data = serialize_top_customers(data)
@@ -183,13 +233,22 @@ def top_customers_analytics(request):
         
     except Exception as e:
         logger.error(f"Top customers error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def fulfillment_analytics(request):
     """Get fulfillment and shipping analytics"""
+    start_time = time.time()
+    action = "fulfillment_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -198,9 +257,10 @@ def fulfillment_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_fulfillment_analytics(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_fulfillment_analytics(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_fulfillment_analytics(data)
@@ -212,13 +272,22 @@ def fulfillment_analytics(request):
         
     except Exception as e:
         logger.error(f"Fulfillment analytics error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def refund_analytics(request):
     """Get refund analytics"""
+    start_time = time.time()
+    action = "refund_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -227,9 +296,10 @@ def refund_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_refund_analytics(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_refund_analytics(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_refund_analytics(data)
@@ -241,13 +311,22 @@ def refund_analytics(request):
         
     except Exception as e:
         logger.error(f"Refund analytics error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def customer_retention_analytics(request):
     """Get customer retention analytics"""
+    start_time = time.time()
+    action = "customer_retention_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -256,9 +335,10 @@ def customer_retention_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_customer_retention_analytics(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_customer_retention_analytics(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_customer_retention_analytics(data)
@@ -270,13 +350,22 @@ def customer_retention_analytics(request):
         
     except Exception as e:
         logger.error(f"Customer retention analytics error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def hourly_order_distribution_analytics(request):
     """Get distribution of orders by hour of day"""
+    start_time = time.time()
+    action = "hourly_order_distribution_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -285,9 +374,10 @@ def hourly_order_distribution_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_hourly_order_distribution(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_hourly_order_distribution(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_hourly_distribution(data)
@@ -299,13 +389,22 @@ def hourly_order_distribution_analytics(request):
         
     except Exception as e:
         logger.error(f"Hourly order distribution error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()
 
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key='user', rate='100/h', method='GET', block=True)
 def day_of_week_distribution_analytics(request):
     """Get distribution of orders by day of week"""
+    start_time = time.time()
+    action = "day_of_week_distribution_analytics"
     try:
         start_date_str = request.GET.get('start_date')
         end_date_str = request.GET.get('end_date')
@@ -314,9 +413,10 @@ def day_of_week_distribution_analytics(request):
         if error:
             return APIResponse.bad_request(error["error"])
         
-        data = OrderAnalyticsSelector.get_day_of_week_distribution(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: OrderAnalyticsSelector.get_day_of_week_distribution(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_day_of_week_distribution(data)
@@ -328,4 +428,8 @@ def day_of_week_distribution_analytics(request):
         
     except Exception as e:
         logger.error(f"Day of week distribution error: {str(e)}")
+        log_analytics_request(
+            logger, request, action, start_time, 500, APP_NAME,
+            extra={"error": str(e), "exception_type": type(e).__name__}
+        )
         return APIResponse.server_error()

@@ -152,6 +152,62 @@ def log_action(
     )
 
 
+def log_analytics_request(
+    logger: logging.Logger,
+    request: HttpRequest,
+    action: str,
+    start_time: float,
+    status_code: int,
+    app_name: str,
+    extra: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Log an analytics endpoint request consistently across products/orders/users.
+
+    Previously duplicated as a private `_log_analytics_request` helper inside
+    apps/products/views/analytics_views.py — consolidated here so orders and
+    users analytics views (which lacked this logging entirely) can share it.
+    """
+    import time as _time
+
+    duration_ms = (_time.time() - start_time) * 1000
+    user = request.user if hasattr(request, 'user') else None
+
+    log_data = {
+        "duration_ms": round(duration_ms, 2),
+        "path": request.path,
+        "method": request.method,
+        "user_role": getattr(user, 'role', 'unknown') if user else 'anonymous',
+        "user_id": str(user.id) if user and hasattr(user, 'id') else None,
+    }
+    if extra:
+        log_data.update(extra)
+
+    if status_code < 400:
+        severity = LogSeverity.INFO
+        description = "Analytics request successful"
+    elif status_code == 429:
+        severity = LogSeverity.WARNING
+        description = "Analytics request rate limited"
+    elif status_code < 500:
+        severity = LogSeverity.WARNING
+        description = "Analytics request failed - invalid parameters"
+    else:
+        severity = LogSeverity.ERROR
+        description = "Analytics request failed with server error"
+
+    log_action(
+        logger=logger,
+        severity=severity,
+        action=action,
+        description=description,
+        status_code=status_code,
+        user=user,
+        request=request,
+        app_name=app_name,
+        extra=log_data,
+    )
+
+
 def _save_log_to_db_async(app_name, action, severity, description, status_code, user, request, extra):
     """
     Save log to database in a non-blocking way.

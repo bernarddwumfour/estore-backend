@@ -26,7 +26,8 @@ from apps.products.schemas.analytics_schemas import (
     serialize_categories_response,
 )
 from apps.users.decorators.auth import jwt_required, role_required
-from apps.common.logging import log_action, LogSeverity, get_user_info
+from apps.common.logging import log_action, LogSeverity, get_user_info, log_analytics_request
+from apps.common.analytics_cache import cached_analytics
 
 logger = logging.getLogger(__name__)
 
@@ -35,45 +36,9 @@ APP_NAME = "products"
 
 
 def _log_analytics_request(request, action, start_time, status_code, extra=None):
-    """Helper to log analytics requests consistently with app field"""
-    duration_ms = (time.time() - start_time) * 1000
-    user = request.user if hasattr(request, 'user') else None
-    
-    log_data = {
-        "duration_ms": round(duration_ms, 2),
-        "path": request.path,
-        "method": request.method,
-        "user_role": getattr(user, 'role', 'unknown') if user else 'anonymous',
-        "user_id": str(user.id) if user and hasattr(user, 'id') else None,
-    }
-    if extra:
-        log_data.update(extra)
-    
-    # Determine severity based on status code
-    if status_code < 400:
-        severity = LogSeverity.INFO
-        description = "Analytics request successful"
-    elif status_code == 429:
-        severity = LogSeverity.WARNING
-        description = "Analytics request rate limited"
-    elif status_code < 500:
-        severity = LogSeverity.WARNING
-        description = "Analytics request failed - invalid parameters"
-    else:
-        severity = LogSeverity.ERROR
-        description = "Analytics request failed with server error"
-    
-    log_action(
-        logger=logger,
-        severity=severity,
-        action=action,
-        description=description,
-        status_code=status_code,
-        user=user,
-        request=request,
-        app_name=APP_NAME,
-        extra=log_data
-    )
+    """Thin wrapper over the shared apps.common.logging.log_analytics_request,
+    kept under this name/signature so the many call sites below don't need to change."""
+    log_analytics_request(logger, request, action, start_time, status_code, APP_NAME, extra)
 
 
 @csrf_exempt
@@ -109,9 +74,10 @@ def product_analytics_overview(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        data = ProductAnalyticsSelector.get_overview_stats(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_overview_stats(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_overview_stats(data)
@@ -174,11 +140,15 @@ def sales_performance_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        data = ProductAnalyticsSelector.get_sales_performance(
-            start_date=start_date,
-            end_date=end_date,
-            category_id=category_id,
-            brand_id=brand_id
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_sales_performance(
+                start_date=start_date,
+                end_date=end_date,
+                category_id=category_id,
+                brand_id=brand_id
+            ),
+            start_date=start_date_str, end_date=end_date_str, category_id=category_id, brand_id=brand_id,
         )
         
         serialized_data = serialize_sales_performance(data)
@@ -241,9 +211,10 @@ def product_funnel_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        data = ProductAnalyticsSelector.get_product_funnel_analytics(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_product_funnel_analytics(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_product_funnel(data)
@@ -298,7 +269,10 @@ def inventory_health_analytics(request):
     )
     
     try:
-        data = ProductAnalyticsSelector.get_inventory_health_metrics()
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_inventory_health_metrics(),
+        )
         
         serialized_data = serialize_inventory_health(data)
         
@@ -349,7 +323,10 @@ def pricing_analytics(request):
     )
     
     try:
-        data = ProductAnalyticsSelector.get_pricing_analytics()
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_pricing_analytics(),
+        )
         
         serialized_data = serialize_pricing_analytics(data)
         
@@ -411,9 +388,10 @@ def category_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        data = ProductAnalyticsSelector.get_category_analytics(
-            start_date=start_date,
-            end_date=end_date
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_category_analytics(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_category_analytics(data)
@@ -487,12 +465,16 @@ def top_products_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": limit_error["error"]})
             return APIResponse.bad_request(limit_error["error"])
         
-        products = ProductAnalyticsSelector.get_top_products(
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-            category_id=category_id,
-            brand_id=brand_id
+        products = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_top_products(
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+                category_id=category_id,
+                brand_id=brand_id
+            ),
+            start_date=start_date_str, end_date=end_date_str, limit=limit_str, category_id=category_id, brand_id=brand_id,
         )
         
         serialized_data = serialize_top_products_response(
@@ -569,9 +551,10 @@ def category_performance_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        categories = ProductAnalyticsSelector.get_category_performance(
-            start_date=start_date,
-            end_date=end_date
+        categories = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_category_performance(start_date=start_date, end_date=end_date),
+            start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_categories_response(
@@ -639,10 +622,14 @@ def variant_analytics(request):
             _log_analytics_request(request, action, start_time, 400, extra={"error": error["error"]})
             return APIResponse.bad_request(error["error"])
         
-        variants = ProductAnalyticsSelector.get_variant_analytics(
-            product_id=product_id,
-            start_date=start_date,
-            end_date=end_date
+        variants = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_variant_analytics(
+                product_id=product_id,
+                start_date=start_date,
+                end_date=end_date
+            ),
+            product_id=product_id, start_date=start_date_str, end_date=end_date_str,
         )
         
         serialized_data = serialize_variants_response(
@@ -704,7 +691,10 @@ def inventory_status_analytics(request):
     )
     
     try:
-        data = ProductAnalyticsSelector.get_inventory_status()
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_inventory_status(),
+        )
         
         serialized_data = serialize_inventory_status(data)
         
@@ -760,7 +750,10 @@ def price_distribution_analytics(request):
     )
     
     try:
-        data = ProductAnalyticsSelector.get_price_distribution()
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_price_distribution(),
+        )
         
         serialized_data = serialize_price_distribution(data)
         
@@ -812,7 +805,10 @@ def review_analytics(request):
     )
     
     try:
-        data = ProductAnalyticsSelector.get_review_analytics()
+        data = cached_analytics(
+            APP_NAME, action,
+            lambda: ProductAnalyticsSelector.get_review_analytics(),
+        )
         
         serialized_data = serialize_review_analytics(data)
         

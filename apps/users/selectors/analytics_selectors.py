@@ -3,10 +3,16 @@ User Analytics Selectors - Database read operations for user analytics
 No business logic - just queries
 """
 
-from django.db.models import Sum, Count, Avg, Q, Min, Max,  DecimalField, IntegerField
-from django.db.models.functions import TruncDay, TruncWeek, TruncMonth, Coalesce
+from django.db.models import (
+    Sum, Count, Avg, Q, Min, Max, F, Case, When, Value,
+    DecimalField, IntegerField, CharField, DurationField, ExpressionWrapper,
+)
+from django.db.models.functions import (
+    TruncDay, TruncWeek, TruncMonth, Coalesce, ExtractYear, ExtractMonth, ExtractDay, Now,
+)
+from django.contrib.auth.hashers import UNUSABLE_PASSWORD_PREFIX
 from django.utils import timezone
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
 
@@ -154,40 +160,31 @@ class UserAnalyticsSelector:
             order_count=Count('id')
         ).filter(order_count__gt=1).count()
         
-        # Customer lifetime value - fix: use proper aggregation
+        # Customer lifetime value - computed via a single grouped aggregate query
+        # (per-customer totals grouped by `user`, then averaged in the DB).
         customer_totals = orders_queryset.filter(user__isnull=False).values('user').annotate(
-            total_spent=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField())
+            total_spent=Coalesce(Sum('total'), Decimal('0.00'), output_field=DecimalField()),
+            order_count=Count('id'),
         )
-        
-        total_spent_sum = 0
-        customer_count = 0
-        for ct in customer_totals:
-            total_spent_sum += float(ct['total_spent'])
-            customer_count += 1
-        
-        avg_clv = total_spent_sum / customer_count if customer_count > 0 else 0
-        
-        # Average orders per customer
-        customer_order_counts = orders_queryset.filter(user__isnull=False).values('user').annotate(
-            order_count=Count('id')
+
+        clv_summary = customer_totals.aggregate(
+            avg_total_spent=Avg('total_spent'),
+            avg_order_count=Avg('order_count'),
         )
-        
-        total_orders_count = 0
-        for coc in customer_order_counts:
-            total_orders_count += coc['order_count']
-        
-        avg_orders_per_customer = total_orders_count / customer_count if customer_count > 0 else 0
-        
-        # Guest conversion to registered - fix: cannot use has_usable_password in queryset
-        # Get all guest users and manually check password status
+
+        avg_clv = float(clv_summary['avg_total_spent']) if clv_summary['avg_total_spent'] is not None else 0
+        avg_orders_per_customer = float(clv_summary['avg_order_count']) if clv_summary['avg_order_count'] is not None else 0
+
+        # Guest conversion to registered - `has_usable_password()` just checks
+        # whether the stored hash starts with Django's unusable-password
+        # sentinel, so do that filtering in the DB instead of per-instance.
         guest_users = User.objects.filter(is_guest=True)
         total_guests = guest_users.count()
-        
-        # Count converted guests manually
-        converted_guests = 0
-        for user in guest_users:
-            if user.has_usable_password():
-                converted_guests += 1
+
+        guests_without_usable_password = guest_users.filter(
+            password__startswith=UNUSABLE_PASSWORD_PREFIX
+        ).count()
+        converted_guests = total_guests - guests_without_usable_password
         
         return {
             "customer_engagement": {
@@ -261,17 +258,15 @@ class UserAnalyticsSelector:
         if end_date:
             queryset = queryset.filter(created_at__lte=end_date)
         
-        # Login activity (using last_login field)
+        # Login activity (using last_login field) - average time since last
+        # login computed via DB-side date math instead of looping every user.
         users_with_login = queryset.filter(last_login__isnull=False)
-        avg_last_login_days = 0
-        if users_with_login.exists():
-            now = timezone.now()
-            login_days = []
-            for user in users_with_login:
-                if user.last_login:
-                    delta = now - user.last_login
-                    login_days.append(delta.days)
-            avg_last_login_days = round(sum(login_days) / len(login_days), 2) if login_days else 0
+        avg_duration = users_with_login.annotate(
+            time_since_login=ExpressionWrapper(
+                Now() - F('last_login'), output_field=DurationField()
+            )
+        ).aggregate(avg_duration=Avg('time_since_login'))['avg_duration']
+        avg_last_login_days = round(avg_duration.total_seconds() / 86400, 2) if avg_duration else 0
         
         # Recently active (last 7 days)
         seven_days_ago = timezone.now() - timedelta(days=7)
@@ -429,9 +424,53 @@ class UserAnalyticsSelector:
     def get_customer_demographics() -> Dict[str, Any]:
         """Get customer demographic analytics"""
         
-        # Age distribution from customer profiles
-        customer_profiles = CustomerProfile.objects.select_related('user')
-        
+        # Age distribution from customer profiles - age is computed and
+        # bucketed entirely in the DB via a single grouped aggregate query,
+        # instead of loading every profile and bucketing in Python.
+        customer_profiles = CustomerProfile.objects.all()
+
+        today = date.today()
+
+        # Mirrors CustomerProfile.age: today.year - dob.year, minus one if
+        # today's (month, day) falls before dob's (month, day) this year.
+        age_annotated = customer_profiles.annotate(
+            dob_year=ExtractYear('date_of_birth'),
+            dob_month=ExtractMonth('date_of_birth'),
+            dob_day=ExtractDay('date_of_birth'),
+        ).annotate(
+            computed_age=Case(
+                When(date_of_birth__isnull=True, then=Value(None)),
+                default=(
+                    Value(today.year, output_field=IntegerField()) - F('dob_year')
+                    - Case(
+                        When(
+                            Q(dob_month__gt=today.month)
+                            | Q(dob_month=today.month, dob_day__gt=today.day),
+                            then=Value(1),
+                        ),
+                        default=Value(0),
+                        output_field=IntegerField(),
+                    )
+                ),
+                output_field=IntegerField(),
+            )
+        ).annotate(
+            # Same bucket boundaries/labels as the original Python loop.
+            # Note: like the original code, an age below 18 (with a known
+            # date_of_birth) does not match any bucket and is intentionally
+            # excluded from the counts below (not even "Unknown").
+            age_bucket=Case(
+                When(date_of_birth__isnull=True, then=Value("Unknown")),
+                When(computed_age__gte=18, computed_age__lte=24, then=Value("18-24")),
+                When(computed_age__gte=25, computed_age__lte=34, then=Value("25-34")),
+                When(computed_age__gte=35, computed_age__lte=44, then=Value("35-44")),
+                When(computed_age__gte=45, computed_age__lte=54, then=Value("45-54")),
+                When(computed_age__gte=55, then=Value("55+")),
+                default=Value(None),
+                output_field=CharField(),
+            )
+        )
+
         age_groups = {
             "18-24": 0,
             "25-34": 0,
@@ -440,23 +479,13 @@ class UserAnalyticsSelector:
             "55+": 0,
             "Unknown": 0,
         }
-        
-        for profile in customer_profiles:
-            age = profile.age
-            if age:
-                if 18 <= age <= 24:
-                    age_groups["18-24"] += 1
-                elif 25 <= age <= 34:
-                    age_groups["25-34"] += 1
-                elif 35 <= age <= 44:
-                    age_groups["35-44"] += 1
-                elif 45 <= age <= 54:
-                    age_groups["45-54"] += 1
-                elif age >= 55:
-                    age_groups["55+"] += 1
-            else:
-                age_groups["Unknown"] += 1
-        
+
+        bucket_counts = age_annotated.values('age_bucket').annotate(count=Count('id'))
+        for row in bucket_counts:
+            bucket = row['age_bucket']
+            if bucket in age_groups:
+                age_groups[bucket] = row['count']
+
         total_profiles = customer_profiles.count()
         
         # Marketing preferences

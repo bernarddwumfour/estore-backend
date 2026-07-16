@@ -267,20 +267,27 @@ class ProductAnalyticsSelector:
     def get_inventory_health_metrics() -> Dict[str, Any]:
         """Get detailed inventory health metrics"""
 
-        variants = ProductVariant.objects.filter(is_active=True)
+        variants = list(ProductVariant.objects.filter(is_active=True).select_related("product")[:50])
+        variant_ids = [v.id for v in variants]
 
         ninety_days_ago = timezone.now() - timedelta(days=90)
 
-        turnover_data = []
-        for variant in variants[:50]:
-            sales_90d = (
-                OrderItem.objects.filter(
-                    variant=variant,
-                    order__payment_status=Order.PAYMENT_PAID,
-                    order__created_at__gte=ninety_days_ago,
-                ).aggregate(total=Sum("quantity"))["total"]
-                or 0
+        # Batch 90-day sales for all variants in a single grouped query instead of
+        # issuing one OrderItem.aggregate() per variant.
+        sales_90d_by_variant = {
+            row["variant"]: row["total"] or 0
+            for row in OrderItem.objects.filter(
+                variant_id__in=variant_ids,
+                order__payment_status=Order.PAYMENT_PAID,
+                order__created_at__gte=ninety_days_ago,
             )
+            .values("variant")
+            .annotate(total=Sum("quantity"))
+        }
+
+        turnover_data = []
+        for variant in variants:
+            sales_90d = sales_90d_by_variant.get(variant.id, 0)
 
             average_inventory = (variant.stock + variant.stock) / 2
             turnover_rate = (
@@ -438,41 +445,114 @@ class ProductAnalyticsSelector:
     ) -> List[Dict[str, Any]]:
         """Get detailed category analytics"""
 
-        categories = Category.objects.filter(is_active=True, is_hidden=False)
+        categories = list(Category.objects.filter(is_active=True, is_hidden=False))
+
+        # get_descendant_ids() is a recursive tree traversal that isn't easily
+        # expressible as a single batched query - kept as one lightweight call per
+        # category (as before). Everything downstream that previously ran a fresh
+        # query per category is now batched into a handful of grouped queries.
+        descendant_ids_by_category = {
+            category.id: category.get_descendant_ids() for category in categories
+        }
+
+        # Product counts grouped by each product's own (direct) category.
+        products_by_direct_category: Dict[Any, int] = {
+            row["category_id"]: row["count"]
+            for row in Product.objects.filter(status=Product.STATUS_PUBLISHED)
+            .values("category_id")
+            .annotate(count=Count("id"))
+        }
+
+        # Variant counts + price sums grouped by the owning product's direct category.
+        variants_by_direct_category: Dict[Any, Dict[str, Any]] = {
+            row["product__category_id"]: row
+            for row in ProductVariant.objects.filter(is_active=True)
+            .values("product__category_id")
+            .annotate(count=Count("id"), price_sum=Sum("price"))
+        }
+
+        order_items = OrderItem.objects.filter(order__payment_status=Order.PAYMENT_PAID)
+        if start_date:
+            order_items = order_items.filter(order__created_at__gte=start_date)
+        if end_date:
+            order_items = order_items.filter(order__created_at__lte=end_date)
+
+        # Quantity/revenue sums grouped by direct category.
+        sales_by_direct_category: Dict[Any, Dict[str, Any]] = {
+            row["variant__product__category_id"]: row
+            for row in order_items.values("variant__product__category_id").annotate(
+                total_quantity=Sum("quantity"), total_revenue=Sum("total_price")
+            )
+        }
+
+        # Distinct order ids per direct category, so a category's distinct order
+        # count can be derived by unioning its descendants' order-id sets rather
+        # than issuing a per-category distinct COUNT query.
+        order_ids_by_direct_category: Dict[Any, set] = {}
+        for row in order_items.values(
+            "variant__product__category_id", "order_id"
+        ).distinct():
+            order_ids_by_direct_category.setdefault(
+                row["variant__product__category_id"], set()
+            ).add(row["order_id"])
+
+        # Per-product sales tagged with each product's direct category, used to
+        # derive every category's top-5 products in Python instead of a query
+        # per category.
+        per_product_sales = list(
+            order_items.values(
+                "variant__product__id",
+                "variant__product__title",
+                "variant__product__category_id",
+            ).annotate(revenue=Sum("total_price"), quantity=Sum("quantity"))
+        )
+
         result = []
 
         for category in categories:
-            descendant_ids = category.get_descendant_ids()
-            products = Product.objects.filter(
-                category_id__in=descendant_ids, status=Product.STATUS_PUBLISHED
+            descendant_ids = descendant_ids_by_category[category.id]
+
+            total_products = sum(
+                products_by_direct_category.get(cid, 0) for cid in descendant_ids
             )
 
-            variants = ProductVariant.objects.filter(
-                product__in=products, is_active=True
+            total_variants = 0
+            price_sum = Decimal("0")
+            for cid in descendant_ids:
+                variant_row = variants_by_direct_category.get(cid)
+                if variant_row:
+                    total_variants += variant_row["count"] or 0
+                    price_sum += variant_row["price_sum"] or Decimal("0")
+
+            avg_product_price = (
+                float(price_sum / total_variants) if total_variants > 0 else 0
             )
 
-            order_items = OrderItem.objects.filter(
-                variant__in=variants, order__payment_status=Order.PAYMENT_PAID
-            )
+            total_quantity = 0
+            total_revenue = Decimal("0")
+            for cid in descendant_ids:
+                sales_row = sales_by_direct_category.get(cid)
+                if sales_row:
+                    total_quantity += sales_row["total_quantity"] or 0
+                    total_revenue += sales_row["total_revenue"] or Decimal("0")
 
-            if start_date:
-                order_items = order_items.filter(order__created_at__gte=start_date)
-            if end_date:
-                order_items = order_items.filter(order__created_at__lte=end_date)
+            order_id_set: set = set()
+            for cid in descendant_ids:
+                order_id_set |= order_ids_by_direct_category.get(cid, set())
+            total_orders = len(order_id_set)
 
-            sales_data = order_items.aggregate(
-                total_quantity=Sum("quantity"),
-                total_revenue=Sum("total_price"),
-                total_orders=Count("order", distinct=True),
-            )
+            revenue = float(total_revenue)
 
-            top_products_in_category = (
-                order_items.values("variant__product__id", "variant__product__title")
-                .annotate(revenue=Sum("total_price"), quantity=Sum("quantity"))
-                .order_by("-revenue")[:5]
-            )
-
-            revenue = float(sales_data["total_revenue"] or 0)
+            descendant_id_set = set(descendant_ids)
+            top_products_in_category = sorted(
+                (
+                    p
+                    for p in per_product_sales
+                    if p["variant__product__category_id"] in descendant_id_set
+                ),
+                key=lambda p: p["revenue"] or 0,
+                reverse=True,
+            )[:5]
 
             result.append(
                 {
@@ -480,14 +560,12 @@ class ProductAnalyticsSelector:
                     "name": category.name,
                     "slug": category.slug,
                     "metrics": {
-                        "total_products": products.count(),
-                        "total_variants": variants.count(),
-                        "total_quantity_sold": sales_data["total_quantity"] or 0,
+                        "total_products": total_products,
+                        "total_variants": total_variants,
+                        "total_quantity_sold": total_quantity,
                         "total_revenue": revenue,
-                        "total_orders": sales_data["total_orders"] or 0,
-                        "avg_product_price": float(
-                            variants.aggregate(avg=Avg("price"))["avg"] or 0
-                        ),
+                        "total_orders": total_orders,
+                        "avg_product_price": avg_product_price,
                     },
                     "top_products": [
                         {
@@ -608,37 +686,73 @@ class ProductAnalyticsSelector:
         product_id: Optional[str] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
+        limit: int = 50,
     ) -> List[Dict[str, Any]]:
         """Get detailed analytics for product variants"""
 
-        variants = ProductVariant.objects.filter(is_active=True)
+        variants = ProductVariant.objects.filter(is_active=True).select_related(
+            "product", "product__category"
+        )
 
         if product_id:
             variants = variants.filter(product_id=product_id)
 
-        result = []
+        variants = list(variants[:limit])
+        variant_ids = [v.id for v in variants]
 
-        for variant in variants:
-            order_items = OrderItem.objects.filter(
-                variant=variant, order__payment_status=Order.PAYMENT_PAID
-            )
+        # Batch sales data for all variants in a single grouped query instead of
+        # issuing one OrderItem.aggregate() per variant.
+        order_items = OrderItem.objects.filter(
+            variant_id__in=variant_ids, order__payment_status=Order.PAYMENT_PAID
+        )
+        if start_date:
+            order_items = order_items.filter(order__created_at__gte=start_date)
+        if end_date:
+            order_items = order_items.filter(order__created_at__lte=end_date)
 
-            if start_date:
-                order_items = order_items.filter(order__created_at__gte=start_date)
-            if end_date:
-                order_items = order_items.filter(order__created_at__lte=end_date)
-
-            sales_data = order_items.aggregate(
+        sales_by_variant = {
+            row["variant"]: row
+            for row in order_items.values("variant").annotate(
                 quantity_sold=Sum("quantity"),
                 revenue=Sum("total_price"),
                 orders=Count("order", distinct=True),
             )
+        }
 
-            quantity_sold = sales_data["quantity_sold"] or 0
-            revenue = float(sales_data["revenue"] or 0)
-            orders = sales_data["orders"] or 0
+        # Batch wishlist counts for all variants in a single grouped query instead of
+        # issuing one Wishlist.objects.filter(...).count() per variant.
+        wishlist_counts = {
+            row["variant"]: row["count"]
+            for row in Wishlist.objects.filter(variant_id__in=variant_ids)
+            .values("variant")
+            .annotate(count=Count("id"))
+        }
 
-            wishlist_adds = Wishlist.objects.filter(variant=variant).count()
+        # Batch category price-rank lookups: one ordered id list per distinct
+        # category instead of re-scanning the whole category for every variant
+        # (turns N variants x category-scan into K distinct categories x 1 query).
+        category_ids = {
+            v.product.category_id for v in variants if v.product.category_id
+        }
+        category_rank_lookup: Dict[Any, Dict[Any, int]] = {}
+        for category_id in category_ids:
+            ordered_ids = ProductVariant.objects.filter(
+                product__category_id=category_id, is_active=True
+            ).order_by("-price").values_list("id", flat=True)
+            category_rank_lookup[category_id] = {
+                v_id: idx for idx, v_id in enumerate(ordered_ids, 1)
+            }
+
+        result = []
+
+        for variant in variants:
+            sales_data = sales_by_variant.get(variant.id, {})
+
+            quantity_sold = sales_data.get("quantity_sold") or 0
+            revenue = float(sales_data.get("revenue") or 0)
+            orders = sales_data.get("orders") or 0
+
+            wishlist_adds = wishlist_counts.get(variant.id, 0)
 
             initial_stock = variant.stock + quantity_sold
             stock_turnover_rate = (
@@ -657,15 +771,12 @@ class ProductAnalyticsSelector:
                 else 0
             )
 
-            category_products = ProductVariant.objects.filter(
-                product__category=variant.product.category, is_active=True
-            )
             rank = 0
-            for idx, v in enumerate(category_products.order_by("-price"), 1):
-                if v.id == variant.id:
-                    rank = idx
-                    
-                
+            if variant.product.category_id:
+                rank = category_rank_lookup.get(variant.product.category_id, {}).get(
+                    variant.id, 0
+                )
+
             discount_percentage = float((variant.discount_amount / variant.price * 100)) if variant.price > 0 and variant.discount_amount > 0 else 0
 
 
@@ -806,26 +917,28 @@ class ProductAnalyticsSelector:
                     }
                 )
 
-        inventory_by_brand = []
-        brand_values = {}
-        for variant in variants:
-            brand = variant.attributes.get("brand")
-            if brand:
-                if brand not in brand_values:
-                    brand_values[brand] = {
-                        "brand": brand,
-                        "total_stock": 0,
-                        "total_value": 0,
-                        "variants_count": 0,
-                    }
-                brand_values[brand]["total_stock"] += variant.stock
-                brand_values[brand]["total_value"] += (
-                    float(variant.price) * variant.stock
-                )
-                brand_values[brand]["variants_count"] += 1
+        # Single DB-side grouped aggregate instead of loading every active variant
+        # into Python and summing by the "brand" key of the attributes JSON field.
+        brand_stats = (
+            variants.exclude(attributes__brand__isnull=True)
+            .exclude(attributes__brand="")
+            .values("attributes__brand")
+            .annotate(
+                total_stock=Sum("stock"),
+                total_value=Sum(F("price") * F("stock")),
+                variants_count=Count("id"),
+            )
+        )
 
-        for brand_data in brand_values.values():
-            inventory_by_brand.append(brand_data)
+        inventory_by_brand = [
+            {
+                "brand": row["attributes__brand"],
+                "total_stock": row["total_stock"] or 0,
+                "total_value": float(row["total_value"] or 0),
+                "variants_count": row["variants_count"],
+            }
+            for row in brand_stats
+        ]
 
         return {
             "summary": {
@@ -1012,45 +1125,109 @@ class ProductAnalyticsSelector:
     ) -> List[Dict[str, Any]]:
         """Get performance metrics by category (legacy)"""
 
-        categories = Category.objects.filter(is_active=True)
-        result = []
+        categories = list(Category.objects.filter(is_active=True))
 
-        for category in categories:
-            descendant_ids = category.get_descendant_ids()
-            products = Product.objects.filter(
-                category_id__in=descendant_ids, status=Product.STATUS_PUBLISHED
-            )
+        # get_descendant_ids() is a recursive tree traversal that isn't easily
+        # expressible as a single batched query - kept as one lightweight call per
+        # category (as before). Everything downstream that previously ran a fresh
+        # query per category is now batched into a handful of grouped queries.
+        descendant_ids_by_category = {
+            category.id: category.get_descendant_ids() for category in categories
+        }
 
-            variants = ProductVariant.objects.filter(
-                product__in=products, is_active=True
-            )
+        # Product counts grouped by each product's own (direct) category.
+        products_by_direct_category: Dict[Any, int] = {
+            row["category_id"]: row["count"]
+            for row in Product.objects.filter(status=Product.STATUS_PUBLISHED)
+            .values("category_id")
+            .annotate(count=Count("id"))
+        }
 
-            order_items = OrderItem.objects.filter(
-                variant__in=variants, order__payment_status=Order.PAYMENT_PAID
-            )
-
-            if start_date:
-                order_items = order_items.filter(order__created_at__gte=start_date)
-            if end_date:
-                order_items = order_items.filter(order__created_at__lte=end_date)
-
-            sales_data = order_items.aggregate(
-                total_quantity=Sum("quantity"), total_revenue=Sum("total_price")
-            )
-
-            inventory_data = variants.aggregate(
+        # Variant counts/price sums/stock/status counts grouped by direct category.
+        variants_by_direct_category: Dict[Any, Dict[str, Any]] = {
+            row["product__category_id"]: row
+            for row in ProductVariant.objects.filter(is_active=True)
+            .values("product__category_id")
+            .annotate(
+                count=Count("id"),
+                price_sum=Sum("price"),
                 total_stock=Sum("stock"),
                 out_of_stock=Count("id", filter=Q(stock=0)),
                 low_stock=Count(
                     "id", filter=Q(stock__lte=F("low_stock_threshold"), stock__gt=0)
                 ),
             )
+        }
 
-            rating_data = ProductReview.objects.filter(
-                product__in=products, is_approved=True
-            ).aggregate(avg_rating=Avg("rating"), total_reviews=Count("id"))
+        order_items = OrderItem.objects.filter(order__payment_status=Order.PAYMENT_PAID)
+        if start_date:
+            order_items = order_items.filter(order__created_at__gte=start_date)
+        if end_date:
+            order_items = order_items.filter(order__created_at__lte=end_date)
 
-            revenue = float(sales_data["total_revenue"] or 0)
+        # Quantity/revenue sums grouped by direct category.
+        sales_by_direct_category: Dict[Any, Dict[str, Any]] = {
+            row["variant__product__category_id"]: row
+            for row in order_items.values("variant__product__category_id").annotate(
+                total_quantity=Sum("quantity"), total_revenue=Sum("total_price")
+            )
+        }
+
+        # Rating sums/review counts grouped by direct category (weighted average is
+        # derived per outer category from the summed rating + count, not by
+        # averaging per-direct-category averages).
+        ratings_by_direct_category: Dict[Any, Dict[str, Any]] = {
+            row["product__category_id"]: row
+            for row in ProductReview.objects.filter(is_approved=True)
+            .values("product__category_id")
+            .annotate(rating_sum=Sum("rating"), total_reviews=Count("id"))
+        }
+
+        result = []
+
+        for category in categories:
+            descendant_ids = descendant_ids_by_category[category.id]
+
+            total_products = sum(
+                products_by_direct_category.get(cid, 0) for cid in descendant_ids
+            )
+
+            total_variants = 0
+            price_sum = Decimal("0")
+            total_stock = 0
+            out_of_stock = 0
+            low_stock = 0
+            for cid in descendant_ids:
+                variant_row = variants_by_direct_category.get(cid)
+                if variant_row:
+                    total_variants += variant_row["count"] or 0
+                    price_sum += variant_row["price_sum"] or Decimal("0")
+                    total_stock += variant_row["total_stock"] or 0
+                    out_of_stock += variant_row["out_of_stock"] or 0
+                    low_stock += variant_row["low_stock"] or 0
+
+            avg_product_price = (
+                float(price_sum / total_variants) if total_variants > 0 else 0
+            )
+
+            total_quantity = 0
+            total_revenue = Decimal("0")
+            for cid in descendant_ids:
+                sales_row = sales_by_direct_category.get(cid)
+                if sales_row:
+                    total_quantity += sales_row["total_quantity"] or 0
+                    total_revenue += sales_row["total_revenue"] or Decimal("0")
+
+            rating_sum = 0
+            total_reviews = 0
+            for cid in descendant_ids:
+                rating_row = ratings_by_direct_category.get(cid)
+                if rating_row:
+                    rating_sum += rating_row["rating_sum"] or 0
+                    total_reviews += rating_row["total_reviews"] or 0
+            avg_rating = (rating_sum / total_reviews) if total_reviews > 0 else 0
+
+            revenue = float(total_revenue)
 
             result.append(
                 {
@@ -1058,24 +1235,22 @@ class ProductAnalyticsSelector:
                     "name": category.name,
                     "slug": category.slug,
                     "metrics": {
-                        "total_products": products.count(),
-                        "total_variants": variants.count(),
-                        "total_quantity_sold": sales_data["total_quantity"] or 0,
+                        "total_products": total_products,
+                        "total_variants": total_variants,
+                        "total_quantity_sold": total_quantity,
                         "total_revenue": revenue,
                         "revenue_percentage": 0,
                         "quantity_percentage": 0,
-                        "avg_product_price": float(
-                            variants.aggregate(avg=Avg("price"))["avg"] or 0
-                        ),
+                        "avg_product_price": avg_product_price,
                     },
                     "inventory": {
-                        "total_stock": inventory_data["total_stock"] or 0,
-                        "out_of_stock_products": inventory_data["out_of_stock"] or 0,
-                        "low_stock_products": inventory_data["low_stock"] or 0,
+                        "total_stock": total_stock,
+                        "out_of_stock_products": out_of_stock,
+                        "low_stock_products": low_stock,
                     },
                     "engagement": {
-                        "average_rating": float(rating_data["avg_rating"] or 0),
-                        "total_reviews": rating_data["total_reviews"] or 0,
+                        "average_rating": float(avg_rating),
+                        "total_reviews": total_reviews,
                     },
                 }
             )
