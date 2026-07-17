@@ -14,3 +14,8 @@ Local credentials needed for this project (e.g. a GitHub token for pushing)
 should be stored outside this repo's working tree — e.g. via `git
 credential-store` (`~/.git-credentials`) — never inside the project
 directory, even in a gitignored file.
+
+## Commit messages
+
+Do not add a `Co-Authored-By: Claude` (or similar AI attribution) trailer to
+commit messages in this repo.
