@@ -104,15 +104,9 @@ def register_user(request):
         return APIResponse.server_error()
 
 
-@csrf_exempt
-@require_http_methods(["POST"])
-@ratelimit(key="ip", rate="5/m", method="POST", block=True)
-@ratelimit(key="post:email", rate="10/h", method="POST", block=True)
-@json_request_required
-def login(request):
-    """User login"""
+def _handle_login(request, action, allowed_roles):
+    """Shared login flow for the customer and staff login endpoints."""
     start_time = time.time()
-    action = "user_login"
     email = (request.json_data or {}).get("email", "unknown") if hasattr(request, "json_data") else "unknown"
 
     log_action(
@@ -131,7 +125,7 @@ def login(request):
                 return APIResponse.bad_request(f"{field} is required")
 
         auth_data, error = AuthService.authenticate_user(
-            data["email"], data["password"], request
+            data["email"], data["password"], request, allowed_roles=allowed_roles
         )
 
         if error:
@@ -161,6 +155,26 @@ def login(request):
             extra={"email": email, "error": str(e)},
         )
         return APIResponse.server_error()
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@ratelimit(key="ip", rate="5/m", method="POST", block=True)
+@ratelimit(key="post:email", rate="10/h", method="POST", block=True)
+@json_request_required
+def login(request):
+    """Customer login - staff/admin credentials are rejected here."""
+    return _handle_login(request, "customer_login", allowed_roles=[User.ROLE_CUSTOMER])
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@ratelimit(key="ip", rate="5/m", method="POST", block=True)
+@ratelimit(key="post:email", rate="10/h", method="POST", block=True)
+@json_request_required
+def staff_login(request):
+    """Staff/admin login - customer credentials are rejected here."""
+    return _handle_login(request, "staff_login", allowed_roles=[User.ROLE_STAFF, User.ROLE_ADMIN])
 
 
 @csrf_exempt

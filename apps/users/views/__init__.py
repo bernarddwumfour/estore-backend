@@ -6,6 +6,7 @@ from .auth_views import (
     register_customer,
     register_user,
     login,
+    staff_login,
     logout,
     refresh_token,
 )
@@ -70,6 +71,7 @@ __all__ = [
     'register_customer',
     'register_user',
     'login',
+    'staff_login',
     'logout',
     'refresh_token',
     # Profile views

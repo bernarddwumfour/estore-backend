@@ -242,10 +242,12 @@ class AuthService:
     
     @staticmethod
     def authenticate_user(
-        email: str, password: str, request=None
+        email: str, password: str, request=None, allowed_roles: Optional[list] = None
     ) -> Tuple[Optional[Dict], Optional[str]]:
         """
         Authenticate user and generate tokens
+        allowed_roles: if provided, restricts login to users with one of these roles
+        (e.g. staff login must reject customer credentials, and vice versa).
         Returns: (auth_data, error_message)
         """
         try:
@@ -254,7 +256,9 @@ class AuthService:
                 request, username=email.lower().strip(), password=password
             )
 
-            if not user:
+            # Roles are checked alongside credential validity so a role mismatch
+            # doesn't reveal whether the account exists.
+            if not user or (allowed_roles and user.role not in allowed_roles):
                 return None, "Invalid email or password"
 
             if not user.is_active:

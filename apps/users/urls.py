@@ -66,6 +66,7 @@ urlpatterns = [
     path("/register/customer", views.register_customer, name="register-customer"),
     path("/register/user", views.register_user, name="register-user"),
     path("/login", views.login, name="login"),
+    path("/staff-login", views.staff_login, name="staff-login"),
     path("/logout", views.logout, name="logout"),
     path("/refresh-token", views.refresh_token, name="refresh-token"),
     
