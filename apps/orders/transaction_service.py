@@ -97,6 +97,15 @@ class TransactionService:
             if amount <= 0:
                 return None, {"amount": "Refund amount must be greater than 0"}
 
+            # Lock the order row for the rest of this transaction. Without this,
+            # two concurrent refund requests (two admins, or a retried
+            # double-click) can both read the same `refundable` amount below
+            # before either commits, both pass the check, and both succeed —
+            # over-refunding the order. The lock forces the second caller to
+            # wait until the first commits, so it re-reads the amount with the
+            # first refund's Transaction already accounted for.
+            order = Order.objects.select_for_update().get(id=order.id)
+
             # Check refundable amount
             refundable = get_refundable_amount(order_id)
             if amount > refundable:

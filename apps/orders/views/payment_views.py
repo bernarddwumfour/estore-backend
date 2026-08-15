@@ -173,7 +173,14 @@ def paystack_webhook(request):
 @csrf_exempt
 @require_http_methods(["GET"])
 def payment_callback(request):
-    """Handle Paystack payment callback - returns JSON for frontend"""
+    """Handle Paystack payment callback - returns JSON for frontend
+
+    Delegates entirely to PaystackService.process_successful_payment, the
+    same path the webhook uses, so the browser-redirect callback gets the
+    same amount/currency verification and Transaction record as the webhook
+    rather than a second, weaker code path that could mark an order paid
+    without either.
+    """
     try:
         reference = request.GET.get('reference')
         trxref = request.GET.get('trxref')
@@ -183,40 +190,17 @@ def payment_callback(request):
             return APIResponse.bad_request("No payment reference found")
 
         from apps.orders.paystack_service import PaystackService
-        transaction_data, error = PaystackService.verify_transaction(payment_ref)
+        success, result = PaystackService.process_successful_payment(reference=payment_ref)
 
-        if error or not transaction_data:
-            return APIResponse.bad_request(f"Verification failed: {error}")
+        if not success:
+            error_message = (result or {}).get('error', 'Payment verification failed')
+            if error_message == 'Order not found':
+                return APIResponse.not_found(error_message)
+            return APIResponse.bad_request(error_message)
 
-        metadata = transaction_data.get('metadata', {})
-        order_id = metadata.get('order_id')
-
-        if not order_id:
-            from django.core.cache import cache
-            order_id = cache.get(f'paystack_ref_{payment_ref}')
-
-        if transaction_data.get('status') != 'success':
-            # Release reserved stock and mark the order failed for terminal
-            # failures so it isn't left stranded in 'pending'.
-            gateway_status = transaction_data.get('status')
-            if order_id and gateway_status in ('failed', 'abandoned', 'reversed'):
-                OrderService.mark_payment_failed(
-                    order_id, reason=f"Paystack status: {gateway_status}"
-                )
-            return APIResponse.bad_request("Payment was not successful")
-
-        if not order_id:
+        order = result.get('order')
+        if not order:
             return APIResponse.not_found("Order not found")
-
-        order, error = OrderService.update_payment_status(
-            order_id=order_id,
-            payment_status='paid',
-            payment_intent_id=transaction_data.get('reference'),
-            payment_receipt_url=transaction_data.get('receipt_url', ''),
-        )
-
-        if error:
-            return APIResponse.validation_error(error)
 
         serialized_order = serialize_order(order, is_admin=False, detailed=False)
 
