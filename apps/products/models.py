@@ -9,6 +9,7 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
 from django.contrib.auth import get_user_model
+from django.utils.text import slugify
 from decimal import Decimal 
 User = get_user_model()
 
@@ -287,6 +288,11 @@ class ProductVariant(models.Model):
         db_index=True,
         help_text=_("Stock Keeping Unit"),
     )
+    slug = models.SlugField(
+        _("public URL slug"),
+        max_length=180,
+        help_text=_("Stable, human-readable URL identifier within this product"),
+    )
 
     # Variant-specific attributes (e.g., {"brand": "Generic", "color": "Black", "condition": "New"})
     attributes = models.JSONField(
@@ -362,6 +368,9 @@ class ProductVariant(models.Model):
             models.Index(fields=["stock"]),
         ]
         constraints = [
+            models.UniqueConstraint(
+                fields=["product", "slug"], name="unique_variant_slug_per_product"
+            ),
             # Ensure only one default variant per product
             models.UniqueConstraint(
                 fields=["product"],
@@ -374,7 +383,18 @@ class ProductVariant(models.Model):
         return f"{self.sku} - {self.product.title}"
 
     def save(self, *args, **kwargs):
-        """Ensure only one default variant per product"""
+        """Ensure one default and assign a stable public variant slug."""
+        if not self.slug:
+            parts = [str(value) for value in self.attributes.values() if value]
+            base_slug = slugify("-".join(parts)) or slugify(self.sku) or "variant"
+            candidate = base_slug
+            suffix = 2
+            while ProductVariant.objects.filter(
+                product=self.product, slug=candidate
+            ).exclude(id=self.id).exists():
+                candidate = f"{base_slug}-{suffix}"
+                suffix += 1
+            self.slug = candidate
         if self.is_default:
             ProductVariant.objects.filter(
                 product=self.product, is_default=True

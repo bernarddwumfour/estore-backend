@@ -22,6 +22,10 @@ def get_all_variants(
     min_price: float = None,
     max_price: float = None,
     in_stock: bool = None,
+    category_slug: str = None,
+    featured: bool = None,
+    bestseller: bool = None,
+    new: bool = None,
     sort_by: str = "created_at",
     sort_order: str = "desc",
     is_admin: bool = False,
@@ -35,6 +39,15 @@ def get_all_variants(
     # Filter by product
     if product_id:
         queryset = queryset.filter(product_id=product_id)
+
+    if category_slug:
+        queryset = queryset.filter(product__category__slug=category_slug)
+    if featured is not None:
+        queryset = queryset.filter(product__is_featured=featured)
+    if bestseller is not None:
+        queryset = queryset.filter(product__is_bestseller=bestseller)
+    if new is not None:
+        queryset = queryset.filter(product__is_new=new)
 
     # Filter by active status
     if is_active is not None:

@@ -8,6 +8,7 @@ from pathlib import Path
 from decouple import config, Csv
 from importlib.util import find_spec
 import os
+from urllib.parse import urlparse
 try:
     import environ
 except ModuleNotFoundError:  # pragma: no cover - local fallback for lean envs
@@ -52,6 +53,34 @@ ZERNIO_API_KEY = config("ZERNIO_API_KEY", default="")
 ZERNIO_BASE_URL = config("ZERNIO_BASE_URL", default="https://zernio.com/api/v1")
 # Optional comma-separated platform filter, e.g. "instagram,twitter". Empty = all connected accounts.
 ZERNIO_PLATFORMS = [p.strip() for p in config("ZERNIO_PLATFORMS", default="").split(",") if p.strip()]
+
+
+AI_EMBEDDING_MODEL = env(
+    "AI_EMBEDDING_MODEL",
+    default="text-embedding-3-small",
+)
+
+AI_EMBEDDING_DIMENSIONS = env.int(
+    "AI_EMBEDDING_DIMENSIONS",
+    default=1536,
+)
+
+AI_EMBEDDING_CACHE_TTL = env.int(
+    "AI_EMBEDDING_CACHE_TTL",
+    default=86400,
+)
+
+AI_SEMANTIC_MIN_SIMILARITY = env.float(
+    "AI_SEMANTIC_MIN_SIMILARITY",
+    default=0.25,
+)
+
+AI_SEMANTIC_SCORE_MARGIN = env.float(
+    "AI_SEMANTIC_SCORE_MARGIN",
+    default=0.10,
+)
+
+OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 
 # Public storefront base URL used in social post captions
 STOREFRONT_BASE_URL = config("STOREFRONT_BASE_URL", default="http://localhost:3000")
@@ -156,6 +185,7 @@ INSTALLED_APPS = [
     "apps.marketing",
     "apps.social",
     "apps.blog",
+    "apps.ai_assistant",
 ]
 
 for optional_app in ["cloudinary_storage", "django.contrib.staticfiles", "cloudinary"]:
@@ -167,11 +197,32 @@ if "django.contrib.staticfiles" not in INSTALLED_APPS:
         if dependent_app in INSTALLED_APPS:
             INSTALLED_APPS.remove(dependent_app)
 
-# Cloudinary Config (credentials sourced from environment — never hardcode)
+# Cloudinary Config (credentials sourced from environment — never hardcode).
+# Some local deployments historically stored the complete CLOUDINARY_URL in the
+# CLOUDINARY_API_KEY field. Normalize that form so media uploads keep working
+# while the environment is corrected.
+_cloudinary_cloud_name = config("CLOUDINARY_CLOUD_NAME", default="")
+_cloudinary_api_key = config("CLOUDINARY_API_KEY", default="")
+_cloudinary_api_secret = config("CLOUDINARY_API_SECRET", default="")
+
+if _cloudinary_api_key.startswith("CLOUDINARY_URL="):
+    _cloudinary_url = _cloudinary_api_key.removeprefix("CLOUDINARY_URL=")
+    _cloudinary_parts = urlparse(_cloudinary_url)
+
+    if (
+        _cloudinary_parts.scheme == "cloudinary"
+        and _cloudinary_parts.hostname
+        and _cloudinary_parts.username
+        and _cloudinary_parts.password
+    ):
+        _cloudinary_cloud_name = _cloudinary_parts.hostname
+        _cloudinary_api_key = _cloudinary_parts.username
+        _cloudinary_api_secret = _cloudinary_parts.password
+
 CLOUDINARY_STORAGE = {
-    'CLOUD_NAME': config("CLOUDINARY_CLOUD_NAME", default=""),
-    'API_KEY': config("CLOUDINARY_API_KEY", default=""),
-    'API_SECRET': config("CLOUDINARY_API_SECRET", default=""),
+    'CLOUD_NAME': _cloudinary_cloud_name,
+    'API_KEY': _cloudinary_api_key,
+    'API_SECRET': _cloudinary_api_secret,
 }
 
 # Set as default media storage
@@ -445,3 +496,5 @@ MEDIA_URL = "/media/"
 # Absolute filesystem path to the directory that will hold user-uploaded files
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 APPEND_SLASH = False
+
+

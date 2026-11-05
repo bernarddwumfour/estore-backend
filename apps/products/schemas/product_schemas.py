@@ -11,13 +11,19 @@ def serialize_product(product: Product, is_admin: bool = False) -> Dict[str, Any
     
     # Get all variants with their images
     variants = []
-    for variant in product.variants.all():
+    for variant in (
+    product.variants.all()
+    if is_admin
+    else product.variants.filter(is_active=True)
+):
         variant_data = serialize_variant(variant, is_admin=is_admin, include_images=True)
         variants.append(variant_data)
     
     # Get default variant
     default_variant = None
-    if product.default_variant:
+    if product.default_variant and (
+    is_admin or product.default_variant.is_active
+):
         default_variant = serialize_variant(product.default_variant, is_admin=is_admin, include_images=True)
     
     data = {

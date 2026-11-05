@@ -54,6 +54,7 @@ from apps.products.views.variant_views import (
 # Import new review views
 from apps.products.views.review_views import (
     # Public endpoints
+    featured_product_reviews,
     product_reviews_list,
     product_review_create,
     product_review_helpful,
@@ -135,6 +136,11 @@ urlpatterns = [
     ),
     
     # ==================== PUBLIC PRODUCT REVIEW ENDPOINTS ====================
+    path(
+        "/reviews/featured",
+        featured_product_reviews,
+        name="featured-product-reviews",
+    ),
     
     path(
         "/<slug:slug>/reviews/create",

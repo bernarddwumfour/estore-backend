@@ -106,6 +106,7 @@ class ProductService:
         
         return products_data, total, pagination_meta
 
+
     @staticmethod
     def get_public_products(
         page: int = 1,
@@ -122,22 +123,41 @@ class ProductService:
         sort_by: str = "created_at",
         sort_order: str = "desc",
         is_admin: bool = False,
+        product_ids: Optional[list[str]] = None,
+        preserve_order: bool = False,
     ) -> Tuple[List[Dict], int, Dict]:
-        """Get filtered and paginated products for public/customers"""
+        """Get public products with optional semantic candidate filtering."""
+
         start_time = time.time()
         action = "get_public_products"
-        
+
         products, total, pagination_meta = get_products_filtered(
-            page=page, limit=limit, category_slug=category_slug, brand=brand,
-            min_price=min_price, max_price=max_price, in_stock=in_stock,
-            featured=featured, bestseller=bestseller, new=new, search=search,
-            sort_by=sort_by, sort_order=sort_order,
-            include_drafts=False, is_admin=is_admin,
+            page=page,
+            limit=limit,
+            category_slug=category_slug,
+            brand=brand,
+            min_price=min_price,
+            max_price=max_price,
+            in_stock=in_stock,
+            featured=featured,
+            bestseller=bestseller,
+            new=new,
+            search=search,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            include_drafts=False,
+            is_admin=is_admin,
+            product_ids=product_ids,
+            preserve_order=preserve_order,
         )
-        
-        products_data = serialize_product_list(products, is_admin=is_admin)
-        
+
+        products_data = serialize_product_list(
+            products,
+            is_admin=is_admin,
+        )
+
         duration_ms = (time.time() - start_time) * 1000
+
         log_action(
             logger=logger,
             severity=LogSeverity.DEBUG,
@@ -150,11 +170,81 @@ class ProductService:
                 "page": page,
                 "limit": limit,
                 "has_search": bool(search),
-                "duration_ms": round(duration_ms, 2)
-            }
+                "semantic_search": product_ids is not None,
+                "duration_ms": round(duration_ms, 2),
+            },
         )
-        
+
         return products_data, total, pagination_meta
+
+    @staticmethod
+    def get_public_variant_products(
+        page: int = 1,
+        limit: int = 20,
+        search: str = None,
+        min_price: float = None,
+        max_price: float = None,
+        in_stock: bool = None,
+        category_slug: str = None,
+        featured: bool = None,
+        bestseller: bool = None,
+        new: bool = None,
+        sort_by: str = "created_at",
+        sort_order: str = "desc",
+    ) -> Tuple[List[Dict], int, Dict]:
+        """Return public variants as independently paginated storefront cards."""
+        variants, total, pagination_meta = get_all_variants(
+            page=page,
+            limit=limit,
+            search=search,
+            min_price=min_price,
+            max_price=max_price,
+            in_stock=in_stock,
+            category_slug=category_slug,
+            featured=featured,
+            bestseller=bestseller,
+            new=new,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            is_admin=False,
+        )
+
+        cards = []
+        for variant in variants:
+            product = variant.product
+            variant_data = serialize_variant(variant, is_admin=False)
+            attributes = " · ".join(
+                str(value) for value in variant.attributes.values() if value
+            )
+
+            cards.append({
+                "id": f"{product.id}:{variant.id}",
+                "title": (
+                    f"{product.title} — {attributes}"
+                    if attributes else product.title
+                ),
+                "slug": product.slug,
+                "variant_slug": variant.slug,
+                "description": product.description,
+                "features": product.features,
+                "options": product.options,
+                "min_price": float(variant.price),
+                "max_price": float(variant.price),
+                "average_rating": float(product.average_rating),
+                "total_reviews": product.total_reviews,
+                "is_featured": product.is_featured,
+                "is_bestseller": product.is_bestseller,
+                "is_new": product.is_new,
+                "category": ({
+                    "id": str(product.category.id),
+                    "name": product.category.name,
+                    "slug": product.category.slug,
+                } if product.category else None),
+                "default_variant": variant_data,
+                "variants": [variant_data],
+            })
+
+        return cards, total, pagination_meta
     
     @staticmethod
     def get_product_detail(slug: str, is_admin: bool = False) -> Optional[Dict]:

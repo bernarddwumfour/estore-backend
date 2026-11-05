@@ -36,6 +36,20 @@ class ReviewService:
     """Product review business logic"""
 
     @staticmethod
+    def get_featured_product_reviews(limit: int = 8) -> List[Dict]:
+        """Return recent, approved product reviews for public storefront use."""
+        limit = max(1, min(limit, 20))
+
+        reviews = (
+            ProductReview.objects
+            .filter(is_approved=True)
+            .select_related("product", "user")
+            .order_by("-created_at")[:limit]
+        )
+
+        return [serialize_review(review) for review in reviews]
+
+    @staticmethod
     def get_product_reviews(
         product_slug: str,
         page: int = 1,

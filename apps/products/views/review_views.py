@@ -63,6 +63,24 @@ def _log_review_request(request, action, start_time, status_code, extra=None):
 
 @csrf_exempt
 @require_http_methods(["GET"])
+@ratelimit(key="ip", rate="200/h", method="GET", block=True)
+def featured_product_reviews(request):
+    """Return approved reviews suitable for the storefront testimonials area."""
+    try:
+        limit = int(request.GET.get("limit", 8))
+    except ValueError:
+        return APIResponse.bad_request("Invalid query parameter")
+
+    reviews = ReviewService.get_featured_product_reviews(limit=limit)
+
+    return APIResponse.success(
+        data={"reviews": reviews},
+        message="Featured reviews retrieved successfully",
+    )
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
 @ratelimit(key='ip', rate='200/h', method='GET', block=True)
 def product_reviews_list(request, slug):
     start_time = time.time()

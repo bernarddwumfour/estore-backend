@@ -102,6 +102,7 @@ def product_list(request):
         search = sanitize_search_query(request.GET.get("search", ""))
         sort_by = request.GET.get("sort_by", "created_at")
         sort_order = request.GET.get("sort_order", "desc")
+        display = request.GET.get("display", "products")
         
         # Price range
         min_price = request.GET.get("min_price")
@@ -135,8 +136,30 @@ def product_list(request):
         
         is_admin = _is_admin(request)
         
-        # Get products from service
-        products, total, pagination_meta = ProductService.get_public_products(
+        if display not in {"products", "variants"}:
+            return APIResponse.bad_request("Invalid display mode")
+
+        # Variant mode paginates purchasable configurations rather than parent
+        # products, allowing every colour/storage combination its own card.
+        if display == "variants":
+            products, total, pagination_meta = (
+                ProductService.get_public_variant_products(
+                    page=page,
+                    limit=limit,
+                    min_price=min_price,
+                    max_price=max_price,
+                    in_stock=in_stock,
+                    category_slug=category_slug,
+                    featured=featured,
+                    bestseller=bestseller,
+                    new=new,
+                    search=search,
+                    sort_by=sort_by,
+                    sort_order=sort_order,
+                )
+            )
+        else:
+            products, total, pagination_meta = ProductService.get_public_products(
             page=page,
             limit=limit,
             category_slug=category_slug,
@@ -151,7 +174,7 @@ def product_list(request):
             sort_by=sort_by,
             sort_order=sort_order,
             is_admin=is_admin,
-        )
+            )
         
         _log_product_request(
             request, action, start_time, 200,

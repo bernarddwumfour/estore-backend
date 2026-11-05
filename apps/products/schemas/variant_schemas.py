@@ -36,6 +36,7 @@ def serialize_variant(
     # Base fields (visible to everyone)
     data = {
         "id": str(variant.id),
+        "slug": variant.slug,
         "sku": variant.sku if is_admin else _mask_sku(variant.sku),
         "attributes": variant.attributes,
         "price": float(variant.price),
