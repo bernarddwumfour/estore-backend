@@ -191,9 +191,13 @@ class AssistantService:
                             product.get("has_stock", False)
                         ),
                         "image": product.get("image"),
+                        # The search tool may have resolved an exact colour /
+                        # storage request. Preserve that UI selection instead
+                        # of falling back to the parent product's default.
                         "selected_variant_id": (
                             str(selected_variant_id)
-                            if selected_variant_id else None
+                            if selected_variant_id
+                            else product.get("selected_variant_id")
                         ),
                         "variants": variants,
                     }
