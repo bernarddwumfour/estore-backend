@@ -66,6 +66,15 @@ class AssistantOrderDraftService:
         total = subtotal + Decimal(str(selected["cost"])) if selected else subtotal
         from apps.common.models import GeneralConfig
         config = GeneralConfig.get_cached()
+        address_parts = [
+            "••••••",
+            draft.shipping_address.city,
+            draft.shipping_address.state,
+            draft.shipping_address.country,
+        ]
+        masked_address_label = ", ".join(
+            part.strip() for part in address_parts if part and part.strip()
+        )
         payment_methods = []
         if config.paystack_enabled:
             payment_methods.append({"id": "paystack", "name": "Pay securely with Paystack"})
@@ -93,7 +102,7 @@ class AssistantOrderDraftService:
             "currency": "GHS",
             "shipping_options": options,
             "selected_shipping_method": selected["id"] if selected else "",
-            "shipping_address": {"label": draft.shipping_address.full_address},
+            "shipping_address": {"label": masked_address_label},
             "payment_methods": payment_methods,
             "selected_payment_method": (
                 config.default_payment_method

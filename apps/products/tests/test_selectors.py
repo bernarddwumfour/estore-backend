@@ -13,6 +13,7 @@ from apps.products.selectors.category_selectors import (
 )
 from apps.products.selectors.product_selectors import get_product_by_slug
 from apps.products.selectors.variant_selectors import (
+    get_all_variants,
     get_variant_by_id,
     get_variant_by_sku,
 )
@@ -86,6 +87,38 @@ class ProductSelectorTests(TestCase):
 
 
 class VariantSelectorTests(TestCase):
+    def test_public_variant_listing_hides_inactive_and_hidden_categories(self):
+        visible_category = make_category(is_active=True, is_hidden=False)
+        hidden_category = make_category(is_active=True, is_hidden=True)
+        inactive_category = make_category(is_active=False, is_hidden=False)
+
+        visible = make_variant(
+            product=make_product(
+                category=visible_category,
+                status=Product.STATUS_PUBLISHED,
+            ),
+            is_active=True,
+        )
+        make_variant(
+            product=make_product(
+                category=hidden_category,
+                status=Product.STATUS_PUBLISHED,
+            ),
+            is_active=True,
+        )
+        make_variant(
+            product=make_product(
+                category=inactive_category,
+                status=Product.STATUS_PUBLISHED,
+            ),
+            is_active=True,
+        )
+
+        variants, total, _ = get_all_variants(is_admin=False)
+
+        self.assertEqual(total, 1)
+        self.assertEqual([variant.id for variant in variants], [visible.id])
+
     def test_get_variant_by_id_require_active(self):
         active = make_variant(is_active=True)
         inactive = make_variant(is_active=False, sku="inact")

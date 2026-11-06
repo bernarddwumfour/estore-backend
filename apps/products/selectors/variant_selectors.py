@@ -80,7 +80,14 @@ def get_all_variants(
     # Apply admin filters (show inactive products only if admin)
     if not is_admin:
         queryset = queryset.filter(
-            is_active=True, product__status=Product.STATUS_PUBLISHED
+            is_active=True,
+            product__status=Product.STATUS_PUBLISHED,
+        ).filter(
+            Q(product__category__isnull=True)
+            | Q(
+                product__category__is_hidden=False,
+                product__category__is_active=True,
+            )
         )
 
     # Sorting

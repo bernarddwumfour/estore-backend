@@ -266,7 +266,11 @@ def select_exact_variant_cards(products: list[dict], search: Optional[str]) -> l
                 matching_variants.append(variant)
 
         if matching_variants:
-            product["selected_variant_id"] = matching_variants[0]["id"]
+            # Leave the chooser unset if a broad attribute (for example
+            # "new") matches multiple configurations. Selecting the first
+            # one would silently choose an arbitrary variant.
+            if len(matching_variants) == 1:
+                product["selected_variant_id"] = matching_variants[0]["id"]
             exact_cards.append(product)
 
     return exact_cards or products

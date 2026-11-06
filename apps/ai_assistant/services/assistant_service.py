@@ -116,7 +116,47 @@ class AssistantService:
 
     
     @staticmethod
-    def _extract_products(messages, selected_product_id=None, selected_variant_id=None):
+    def _infer_selected_variant(product, response_text):
+        """Resolve a variant only when the assistant names an unambiguous set of its attributes."""
+        if not response_text:
+            return None
+
+        normalize = lambda value: "".join(
+            character for character in str(value).lower() if character.isalnum()
+        )
+        normalized_response = normalize(response_text)
+        title_signature = normalize(product.get("title", "")).replace("apple", "")
+        if not title_signature or title_signature not in normalized_response:
+            return None
+
+        variants = product.get("variants") or []
+        mentioned_attributes = {}
+        for variant in variants:
+            for key, value in (variant.get("attributes") or {}).items():
+                normalized_value = normalize(value)
+                if normalized_value and normalized_value in normalized_response:
+                    mentioned_attributes.setdefault(key, set()).add(normalized_value)
+
+        if not mentioned_attributes:
+            return variants[0].get("id") if len(variants) == 1 else None
+
+        matching_variants = []
+        for variant in variants:
+            attributes = variant.get("attributes") or {}
+            if all(
+                normalize(attributes.get(key, "")) in mentioned_values
+                for key, mentioned_values in mentioned_attributes.items()
+            ):
+                matching_variants.append(variant)
+
+        return matching_variants[0].get("id") if len(matching_variants) == 1 else None
+
+    @staticmethod
+    def _extract_products(
+        messages,
+        selected_variants_by_product=None,
+        response_text="",
+    ):
         """
         Extract lightweight product cards and selectable
         variants from successful search_products results.
@@ -163,9 +203,6 @@ class AssistantService:
                     if not product_id:
                         continue
 
-                    if selected_product_id and str(product_id) != str(selected_product_id):
-                        continue
-
                     variants = []
 
                     for variant in product.get("variants") or []:
@@ -199,7 +236,14 @@ class AssistantService:
                             "image": image,
                         })
 
-                    products_by_id[str(product_id)] = {
+                    product_key = str(product_id)
+                    previous_product = products_by_id.get(product_key, {})
+                    selected_variant_id = (
+                        (selected_variants_by_product or {}).get(product_key)
+                        or product.get("selected_variant_id")
+                        or previous_product.get("selected_variant_id")
+                    )
+                    products_by_id[product_key] = {
                         "id": str(product_id),
                         "title": product.get("title", ""),
                         "slug": product.get("slug", ""),
@@ -213,15 +257,99 @@ class AssistantService:
                         # storage request. Preserve that UI selection instead
                         # of falling back to the parent product's default.
                         "selected_variant_id": str(selected_variant_id)
-                        if selected_variant_id and str(product_id) == str(selected_product_id)
-                        else product.get("selected_variant_id"),
+                        if selected_variant_id
+                        else None,
                         "variants": variants,
                     }
 
             except (json.JSONDecodeError, TypeError, ValueError):
                 continue
 
-        return list(products_by_id.values())[:10]
+        cards = list(products_by_id.values())[:10]
+        for product in cards:
+            product_key = product["id"]
+            draft_variant_id = (selected_variants_by_product or {}).get(product_key)
+            inferred_variant_id = AssistantService._infer_selected_variant(
+                product, response_text
+            )
+            product["selected_variant_id"] = (
+                draft_variant_id
+                or inferred_variant_id
+                or product.get("selected_variant_id")
+            )
+        return cards
+
+    @staticmethod
+    def _recent_product_cards(conversation, limit=20):
+        if conversation is None:
+            return []
+        for previous in conversation.messages.filter(
+            role=ConversationMessage.ROLE_ASSISTANT
+        ).order_by("-created_at")[:limit]:
+            cards = (previous.metadata or {}).get("products") or []
+            if isinstance(cards, list) and cards:
+                return [card for card in cards if isinstance(card, dict)]
+        return []
+
+    @staticmethod
+    def _merge_followup_product_cards(products, previous_cards, message, response_text):
+        """Reuse recent verified cards for an image/show follow-up with no new catalog call."""
+        import re
+
+        text = f"{message} {response_text}".lower()
+        tokens = set(re.findall(r"[a-z0-9]+", text))
+        display_intent = bool(tokens & {"show", "see", "view", "display", "image", "images", "picture", "pictures", "photo", "photos"})
+        reference_to_prior = bool(tokens & {"them", "those", "these", "both", "it", "that", "this", "ones", "one"})
+        if not display_intent:
+            return products
+
+        normalized_text = "".join(character for character in text if character.isalnum())
+        mentioned = []
+        for card in previous_cards:
+            signature = "".join(
+                character
+                for character in str(card.get("title", "")).lower()
+                if character.isalnum()
+            ).replace("apple", "")
+            if signature and signature in normalized_text:
+                mentioned.append(card)
+
+        # Pronouns such as "show them" refer to the latest product cards.
+        candidates = mentioned or (previous_cards if reference_to_prior else [])
+        if not candidates:
+            return products
+
+        resolved_candidates = []
+        for card in candidates:
+            inferred_variant_id = AssistantService._infer_selected_variant(
+                card, response_text
+            )
+            resolved_candidates.append(
+                {
+                    **card,
+                    **(
+                        {"selected_variant_id": inferred_variant_id}
+                        if inferred_variant_id
+                        else {}
+                    ),
+                }
+            )
+
+        merged = {str(card.get("id")): card for card in products if card.get("id")}
+        for previous in resolved_candidates:
+            product_id = previous.get("id")
+            if not product_id:
+                continue
+            product_key = str(product_id)
+            existing = merged.get(product_key)
+            if existing is None:
+                merged[product_key] = previous
+            elif not existing.get("selected_variant_id") and previous.get("selected_variant_id"):
+                merged[product_key] = {
+                    **existing,
+                    "selected_variant_id": previous["selected_variant_id"],
+                }
+        return list(merged.values())[:10]
 
     @staticmethod
     def _extract_order_draft(messages):
@@ -235,6 +363,36 @@ class AssistantService:
             except (json.JSONDecodeError, TypeError, ValueError):
                 continue
         return None
+
+    @staticmethod
+    def _extract_order_tracking(messages):
+        for message in messages:
+            if not isinstance(message, ToolMessage) or message.name != "track_customer_orders":
+                continue
+            try:
+                result = json.loads(message.content)
+                if result.get("success") and isinstance(result.get("orders"), list):
+                    return {
+                        "orders": result["orders"],
+                        "message": result.get("message"),
+                        "view": result.get("view", "detail"),
+                    }
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
+    def _extract_shipping_address_requirement(messages):
+        for message in messages:
+            if not isinstance(message, ToolMessage) or message.name != "prepare_order":
+                continue
+            try:
+                result = json.loads(message.content)
+                if result.get("requires_address") is True:
+                    return True
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return False
 
 
     @classmethod
@@ -305,12 +463,46 @@ class AssistantService:
             )
 
         order_draft = cls._extract_order_draft(result["messages"])
-        selected_item = (order_draft or {}).get("items", [None])[0]
+        order_tracking = cls._extract_order_tracking(result["messages"])
+        requires_shipping_address = cls._extract_shipping_address_requirement(
+            result["messages"]
+        )
+        selected_variants_by_product = {
+            str(item["product_id"]): str(item["variant_id"])
+            for item in (order_draft or {}).get("items", [])
+            if item.get("product_id") and item.get("variant_id")
+        }
         products = cls._extract_products(
             result["messages"],
-            selected_product_id=(selected_item or {}).get("product_id"),
-            selected_variant_id=(selected_item or {}).get("variant_id"),
+            selected_variants_by_product=selected_variants_by_product,
+            response_text=response_text,
         )
+        products = cls._merge_followup_product_cards(
+            products,
+            cls._recent_product_cards(conversation),
+            message,
+            response_text,
+        )
+        lowered_response = response_text.lower()
+        is_image_request = any(
+            word in message.lower()
+            for word in ("show", "see", "image", "picture", "photo")
+        )
+        claims_images_unavailable = any(
+            phrase in lowered_response
+            for phrase in (
+                "can't display images",
+                "cannot display images",
+                "can't show images",
+                "cannot show images",
+                "product cards in the store interface",
+            )
+        )
+        if products and is_image_request and claims_images_unavailable:
+            response_text = (
+                "Here are the product cards for the variants you selected. "
+                "Their images are shown below."
+            )
         
         logger.warning(
     "SHOPPER EXTRACTED PRODUCTS | count=%s | titles=%s",
@@ -338,6 +530,8 @@ class AssistantService:
                 metadata={
                     "products": products,
                     "order_draft": order_draft,
+                    "order_tracking": order_tracking,
+                    "requires_shipping_address": requires_shipping_address,
                 },
             )
 
@@ -353,5 +547,7 @@ class AssistantService:
             "response": response_text,
             "products": products,
             "order_draft": order_draft,
+            "order_tracking": order_tracking,
+            "requires_shipping_address": requires_shipping_address,
             "created_at": assistant_message.created_at,
         }

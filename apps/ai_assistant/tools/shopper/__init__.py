@@ -4,6 +4,7 @@ from apps.ai_assistant.tools.shopper.category_tools import list_product_categori
 from apps.ai_assistant.tools.shopper.product_comparison_tools import compare_products
 from apps.ai_assistant.tools.shopper.wishlist_tools import add_to_wishlist
 from apps.ai_assistant.tools.shopper.order_tools import prepare_order
+from apps.ai_assistant.tools.shopper.order_tracking_tools import track_customer_orders
 
 
 SHOPPER_TOOLS = [
@@ -13,4 +14,5 @@ SHOPPER_TOOLS = [
     compare_products,
     add_to_wishlist,
     prepare_order,
+    track_customer_orders,
 ]
