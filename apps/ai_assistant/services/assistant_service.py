@@ -107,7 +107,7 @@ class AssistantService:
 
     
     @staticmethod
-    def _extract_products(messages):
+    def _extract_products(messages, selected_product_id=None, selected_variant_id=None):
         """
         Extract lightweight product cards and selectable
         variants from successful search_products results.
@@ -150,6 +150,9 @@ class AssistantService:
                     if not product_id:
                         continue
 
+                    if selected_product_id and str(product_id) != str(selected_product_id):
+                        continue
+
                     variants = []
 
                     for variant in product.get("variants") or []:
@@ -188,6 +191,10 @@ class AssistantService:
                             product.get("has_stock", False)
                         ),
                         "image": product.get("image"),
+                        "selected_variant_id": (
+                            str(selected_variant_id)
+                            if selected_variant_id else None
+                        ),
                         "variants": variants,
                     }
 
@@ -277,10 +284,13 @@ class AssistantService:
                 "The assistant returned an empty response."
             )
 
-        products = cls._extract_products(
-            result["messages"]
-        )
         order_draft = cls._extract_order_draft(result["messages"])
+        selected_item = (order_draft or {}).get("items", [None])[0]
+        products = cls._extract_products(
+            result["messages"],
+            selected_product_id=(selected_item or {}).get("product_id"),
+            selected_variant_id=(selected_item or {}).get("variant_id"),
+        )
         
         logger.warning(
     "SHOPPER EXTRACTED PRODUCTS | count=%s | titles=%s",

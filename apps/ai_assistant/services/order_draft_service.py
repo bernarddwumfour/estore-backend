@@ -63,7 +63,7 @@ class AssistantOrderDraftService:
             "id": str(draft.id),
             "confirmation_token": str(draft.confirmation_token),
             "expires_at": draft.expires_at.isoformat(),
-            "items": [{"title": item["product_title"], "quantity": item["quantity"], "attributes": item["variant_attributes"], "unit_price": float(item["unit_price"])} for item in prepared],
+            "items": [{"product_id": str(item["variant"].product_id), "variant_id": str(item["variant"].id), "title": item["product_title"], "quantity": item["quantity"], "attributes": item["variant_attributes"], "unit_price": float(item["unit_price"])} for item in prepared],
             "subtotal": float(subtotal),
             "total": float(total),
             "currency": "GHS",
