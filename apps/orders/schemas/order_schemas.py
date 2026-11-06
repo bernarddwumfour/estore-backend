@@ -12,6 +12,11 @@ from apps.orders.models import Shipment
 
 def serialize_order_item(item, is_admin: bool = False) -> Dict:
     """Serialize order item - includes bundle information"""
+    image = ""
+    if item.variant:
+        variant_image = item.variant.images.filter(is_active=True).order_by("order").first()
+        image = variant_image.image.url if variant_image and variant_image.image else ""
+
     data = {
         "id": str(item.id),
         "product_title": item.product_title,
@@ -23,6 +28,9 @@ def serialize_order_item(item, is_admin: bool = False) -> Dict:
         "discount_amount": float(item.discount_amount),
         "total_price": float(item.total_price),
         "discounted_unit_price": float(item.discounted_unit_price),
+        # A completed order should remain visually identifiable to its owner.
+        # This is public product media, not an admin-only inventory field.
+        "image": image,
         # Bundle fields
         "is_bundle_item": getattr(item, 'is_bundle_item', False),
         "bundle_id": getattr(item, 'bundle_id', None),
@@ -32,11 +40,6 @@ def serialize_order_item(item, is_admin: bool = False) -> Dict:
     
     if is_admin:
         data.update({
-            "image": (
-                item.variant.images.first().image.url
-                if (item.variant and hasattr(item.variant, 'images') and item.variant.images.exists())
-                else ""
-            ) if item.variant else "",
             "cost_price": float(item.variant.cost_price) if item.variant and hasattr(item.variant, 'cost_price') else 0,
             "profit": float(item.total_price - (item.variant.cost_price * item.quantity)) if item.variant and hasattr(item.variant, 'cost_price') else 0,
         })
