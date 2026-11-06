@@ -128,7 +128,7 @@ class AssistantService:
             if not isinstance(message, ToolMessage):
                 continue
 
-            if message.name != "search_products":
+            if message.name not in {"search_products", "get_product_details"}:
                 continue
 
             try:
@@ -145,7 +145,11 @@ class AssistantService:
                 if result.get("success") is not True:
                     continue
 
-                products = result.get("products", [])
+                products = (
+                    result.get("products", [])
+                    if message.name == "search_products"
+                    else [result.get("product")]
+                )
 
                 if not isinstance(products, list):
                     continue
@@ -174,6 +178,11 @@ class AssistantService:
                         if not variant_id or not sku:
                             continue
 
+                        images = variant.get("images") or []
+                        image = variant.get("image") or next(
+                            (entry.get("url") for entry in images if isinstance(entry, dict) and entry.get("url")),
+                            None,
+                        )
                         variants.append({
                             "id": str(variant_id),
                             "sku": str(sku),
@@ -187,7 +196,7 @@ class AssistantService:
                             "is_in_stock": bool(
                                 variant.get("is_in_stock", False)
                             ),
-                            "image": variant.get("image"),
+                            "image": image,
                         })
 
                     products_by_id[str(product_id)] = {
@@ -199,7 +208,7 @@ class AssistantService:
                         "has_stock": bool(
                             product.get("has_stock", False)
                         ),
-                        "image": product.get("image"),
+                        "image": product.get("image") or (variants[0]["image"] if variants else None),
                         # The search tool may have resolved an exact colour /
                         # storage request. Preserve that UI selection instead
                         # of falling back to the parent product's default.

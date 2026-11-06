@@ -59,6 +59,13 @@ class AssistantOrderDraftService:
         options = quotes.get("options", []) if quotes else []
         selected = next((o for o in options if o["id"] == draft.shipping_method), options[0] if options else None)
         total = subtotal + Decimal(str(selected["cost"])) if selected else subtotal
+        from apps.common.models import GeneralConfig
+        config = GeneralConfig.get_cached()
+        payment_methods = []
+        if config.paystack_enabled:
+            payment_methods.append({"id": "paystack", "name": "Pay securely with Paystack"})
+        if config.pod_enabled:
+            payment_methods.append({"id": "pod", "name": "Pay on delivery"})
         return {
             "id": str(draft.id),
             "confirmation_token": str(draft.confirmation_token),
@@ -70,6 +77,12 @@ class AssistantOrderDraftService:
             "shipping_options": options,
             "selected_shipping_method": selected["id"] if selected else "",
             "shipping_address": {"label": draft.shipping_address.full_address},
+            "payment_methods": payment_methods,
+            "selected_payment_method": (
+                config.default_payment_method
+                if config.default_payment_method in [method["id"] for method in payment_methods]
+                else (payment_methods[0]["id"] if payment_methods else "")
+            ),
             "quote_error": quote_error,
         }
 
