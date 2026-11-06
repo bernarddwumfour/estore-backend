@@ -212,11 +212,9 @@ class AssistantService:
                         # The search tool may have resolved an exact colour /
                         # storage request. Preserve that UI selection instead
                         # of falling back to the parent product's default.
-                        "selected_variant_id": (
-                            str(selected_variant_id)
-                            if selected_variant_id
-                            else product.get("selected_variant_id")
-                        ),
+                        "selected_variant_id": str(selected_variant_id)
+                        if selected_variant_id and str(product_id) == str(selected_product_id)
+                        else product.get("selected_variant_id"),
                         "variants": variants,
                     }
 

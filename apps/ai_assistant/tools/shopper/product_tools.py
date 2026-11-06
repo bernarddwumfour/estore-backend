@@ -229,6 +229,9 @@ def serialize_assistant_product(
             product.get("has_stock", False)
         ),
         "image": get_product_image(product),
+        # Resolved only when the requested model/configuration matches an
+        # actual catalog variant, otherwise the UI asks the customer to choose.
+        "selected_variant_id": product.get("selected_variant_id"),
         "variants": variants,
     }
 
@@ -244,19 +247,22 @@ def select_exact_variant_cards(products: list[dict], search: Optional[str]) -> l
         return products
 
     tokens = set(re.findall(r"[a-z0-9]+", search.lower()))
-    if len(tokens) < 2:
+    if not tokens:
         return products
 
     exact_cards = []
     for product in products:
+        product_tokens = set(re.findall(r"[a-z0-9]+", product.get("title", "").lower()))
+        query_mentions_product = bool(product_tokens & tokens)
         matching_variants = []
         for variant in product.get("variants", []):
-            searchable = " ".join([
-                product.get("title", ""),
-                *[str(value) for value in (variant.get("attributes") or {}).values()],
-            ]).lower()
-            searchable_tokens = set(re.findall(r"[a-z0-9]+", searchable))
-            if tokens.issubset(searchable_tokens):
+            attribute_tokens = set()
+            for value in (variant.get("attributes") or {}).values():
+                attribute_tokens.update(re.findall(r"[a-z0-9]+", str(value).lower()))
+            requested_attributes = tokens & attribute_tokens
+            # Do not treat model words/numbers as variant choices. A color or
+            # storage token that appears in variant data is a strong selector.
+            if query_mentions_product and requested_attributes:
                 matching_variants.append(variant)
 
         if matching_variants:
