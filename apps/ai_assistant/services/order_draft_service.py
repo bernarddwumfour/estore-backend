@@ -22,18 +22,23 @@ class AssistantOrderDraftService:
         ).order_by("-is_default", "-created_at").first()
 
     @classmethod
-    def prepare(cls, user, variant_id, quantity=1):
+    def prepare(cls, user, requested_items):
         address = cls._address_for(user)
         if not address:
             return None, {"reason": "shipping_address", "requires_address": True, "error": "Add a saved shipping address in checkout before ordering with the assistant."}
 
-        variant = ProductVariant.objects.select_related("product").filter(
-            id=variant_id, is_active=True, product__status="published"
-        ).first()
-        if not variant or variant.stock < quantity:
-            return None, {"reason": "unavailable", "error": "That product configuration is no longer available in the requested quantity."}
-
-        items = [{"variant_id": str(variant.id), "quantity": quantity}]
+        quantities = {}
+        for item in requested_items:
+            variant_id = str(item["variant_id"])
+            quantities[variant_id] = quantities.get(variant_id, 0) + item.get("quantity", 1)
+        items = []
+        for variant_id, quantity in quantities.items():
+            variant = ProductVariant.objects.select_related("product").filter(
+                id=variant_id, is_active=True, product__status="published"
+            ).first()
+            if not variant or variant.stock < quantity:
+                return None, {"reason": "unavailable", "error": "One or more selected product configurations are unavailable in the requested quantity."}
+            items.append({"variant_id": str(variant.id), "quantity": quantity})
         draft = AssistantOrderDraft.objects.create(
             user=user,
             items=items,
@@ -70,7 +75,19 @@ class AssistantOrderDraftService:
             "id": str(draft.id),
             "confirmation_token": str(draft.confirmation_token),
             "expires_at": draft.expires_at.isoformat(),
-            "items": [{"product_id": str(item["variant"].product_id), "variant_id": str(item["variant"].id), "title": item["product_title"], "quantity": item["quantity"], "attributes": item["variant_attributes"], "unit_price": float(item["unit_price"])} for item in prepared],
+            "items": [{
+                "product_id": str(item["variant"].product_id),
+                "variant_id": str(item["variant"].id),
+                "title": item["product_title"],
+                "quantity": item["quantity"],
+                "attributes": item["variant_attributes"],
+                "unit_price": float(item["unit_price"]),
+                "image": (
+                    item["variant"].images.filter(is_active=True).order_by("order").first().image.url
+                    if item["variant"].images.filter(is_active=True).exists()
+                    else None
+                ),
+            } for item in prepared],
             "subtotal": float(subtotal),
             "total": float(total),
             "currency": "GHS",
