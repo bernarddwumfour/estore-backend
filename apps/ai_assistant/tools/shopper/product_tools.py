@@ -1,6 +1,7 @@
 
 import json
 import logging
+import re
 from typing import Any, Optional
 
 from langchain_core.tools import tool
@@ -232,6 +233,39 @@ def serialize_assistant_product(
     }
 
 
+def select_exact_variant_cards(products: list[dict], search: Optional[str]) -> list[dict]:
+    """Narrow explicit colour/model searches to the matching card and variant.
+
+    Product search intentionally has broad recall. The assistant UI should not,
+    however, show a customer asking for "pink iPhone 13" an unrelated iPhone
+    or silently select the parent product's default configuration.
+    """
+    if not search:
+        return products
+
+    tokens = set(re.findall(r"[a-z0-9]+", search.lower()))
+    if len(tokens) < 2:
+        return products
+
+    exact_cards = []
+    for product in products:
+        matching_variants = []
+        for variant in product.get("variants", []):
+            searchable = " ".join([
+                product.get("title", ""),
+                *[str(value) for value in (variant.get("attributes") or {}).values()],
+            ]).lower()
+            searchable_tokens = set(re.findall(r"[a-z0-9]+", searchable))
+            if tokens.issubset(searchable_tokens):
+                matching_variants.append(variant)
+
+        if matching_variants:
+            product["selected_variant_id"] = matching_variants[0]["id"]
+            exact_cards.append(product)
+
+    return exact_cards or products
+
+
 
 @tool(args_schema=ProductSearchInput)
 def search_products(
@@ -344,6 +378,7 @@ def search_products(
             serialize_assistant_product(product)
             for product in products
         ]
+        product_cards = select_exact_variant_cards(product_cards, search)
         
         logger.info(
     "AI PRODUCT SEARCH RESULT | search=%r | total=%s | products=%s",
