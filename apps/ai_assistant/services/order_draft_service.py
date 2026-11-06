@@ -25,13 +25,13 @@ class AssistantOrderDraftService:
     def prepare(cls, user, variant_id, quantity=1):
         address = cls._address_for(user)
         if not address:
-            return None, {"requires_address": True, "error": "Add a saved shipping address in checkout before ordering with the assistant."}
+            return None, {"reason": "shipping_address", "requires_address": True, "error": "Add a saved shipping address in checkout before ordering with the assistant."}
 
         variant = ProductVariant.objects.select_related("product").filter(
             id=variant_id, is_active=True, product__status="published"
         ).first()
         if not variant or variant.stock < quantity:
-            return None, {"error": "That product configuration is no longer available in the requested quantity."}
+            return None, {"reason": "unavailable", "error": "That product configuration is no longer available in the requested quantity."}
 
         items = [{"variant_id": str(variant.id), "quantity": quantity}]
         draft = AssistantOrderDraft.objects.create(

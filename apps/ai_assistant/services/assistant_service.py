@@ -8,6 +8,7 @@ from django.utils import timezone
 from langchain_core.messages import (
     HumanMessage,
     AIMessage,
+    SystemMessage,
     ToolMessage,
 )
 
@@ -75,6 +76,14 @@ class AssistantService:
                 history.append(
                     AIMessage(content=message.content)
                 )
+                products = message.metadata.get("products", [])
+                if products:
+                    history.append(SystemMessage(content=(
+                        "Previously verified customer-visible product cards. "
+                        "Their variant IDs may be used only with prepare_order, "
+                        "which revalidates live stock and price: "
+                        + json.dumps(products)
+                    )))
 
         return history
 
@@ -319,6 +328,10 @@ class AssistantService:
                 conversation=conversation,
                 role=ConversationMessage.ROLE_ASSISTANT,
                 content=response_text,
+                metadata={
+                    "products": products,
+                    "order_draft": order_draft,
+                },
             )
 
             conversation.updated_at = timezone.now()
