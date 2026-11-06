@@ -96,6 +96,30 @@ class ConversationMessage(models.Model):
 
     def __str__(self):
         return f"{self.role}: {self.content[:50]}"
+
+
+class AssistantOrderDraft(models.Model):
+    """A short-lived, customer-owned checkout prepared by the shopper agent."""
+
+    STATUS_DRAFT = "draft"
+    STATUS_CONFIRMED = "confirmed"
+    STATUS_CHOICES = [(STATUS_DRAFT, "Draft"), (STATUS_CONFIRMED, "Confirmed")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE,
+                             related_name="ai_assistant_order_drafts")
+    items = models.JSONField(default=list)
+    shipping_address = models.ForeignKey("users.Address", on_delete=models.PROTECT)
+    shipping_method = models.CharField(max_length=100, blank=True)
+    confirmation_token = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "ai_assistant_order_drafts"
+        indexes = [models.Index(fields=["user", "status", "expires_at"])]
     
     
 

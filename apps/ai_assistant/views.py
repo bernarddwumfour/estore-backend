@@ -22,6 +22,9 @@ from apps.common.logging import (
 from apps.ai_assistant.services.assistant_service import (
     AssistantService,
 )
+from apps.ai_assistant.services.order_draft_service import AssistantOrderDraftService
+from apps.orders.schemas import serialize_order
+from apps.orders.paystack_service import PaystackService
 
 logger = logging.getLogger(__name__)
 
@@ -111,3 +114,32 @@ def assistant_chat(request):
         return APIResponse.server_error(
             message="The shopping assistant is temporarily unavailable."
         )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@json_request_required
+@ratelimit(key="user", rate="10/h", method="POST", block=True)
+def confirm_assistant_order(request, draft_id):
+    """Create an order only after the customer confirms a prepared draft."""
+    data = request.json_data
+    token = data.get("confirmation_token")
+    payment_method = data.get("payment_method")
+    shipping_method = data.get("shipping_method", "")
+    if not isinstance(token, str) or payment_method not in {"pod", "paystack"}:
+        return APIResponse.bad_request("A valid confirmation and payment method are required.")
+
+    order, error = AssistantOrderDraftService.confirm(
+        request.user, draft_id, token, payment_method, shipping_method
+    )
+    if error:
+        return APIResponse.validation_error(error)
+
+    data = {"order": serialize_order(order, is_admin=False), "payment_method": payment_method}
+    if payment_method == "paystack":
+        payment, pay_error = PaystackService.initialize_transaction(order)
+        if pay_error:
+            return APIResponse.validation_error({"payment": pay_error})
+        data["payment"] = payment
+    return APIResponse.created(data=data, message="Order created. Complete payment to finish checkout." if payment_method == "paystack" else "Order confirmed successfully.")

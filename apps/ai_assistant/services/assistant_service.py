@@ -196,6 +196,19 @@ class AssistantService:
 
         return list(products_by_id.values())[:10]
 
+    @staticmethod
+    def _extract_order_draft(messages):
+        for message in messages:
+            if not isinstance(message, ToolMessage) or message.name != "prepare_order":
+                continue
+            try:
+                result = json.loads(message.content)
+                if result.get("success") and isinstance(result.get("draft"), dict):
+                    return result["draft"]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return None
+
 
     @classmethod
     def send_message(
@@ -267,6 +280,7 @@ class AssistantService:
         products = cls._extract_products(
             result["messages"]
         )
+        order_draft = cls._extract_order_draft(result["messages"])
         
         logger.warning(
     "SHOPPER EXTRACTED PRODUCTS | count=%s | titles=%s",
@@ -304,5 +318,6 @@ class AssistantService:
             "message_id": str(assistant_message.id),
             "response": response_text,
             "products": products,
+            "order_draft": order_draft,
             "created_at": assistant_message.created_at,
         }
