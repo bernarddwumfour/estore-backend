@@ -864,6 +864,7 @@ class AdminProductService:
             variant = ProductVariant.objects.create(
                 product=product, sku=data["sku"], attributes=data["attributes"],
                 price=data["price"], discount_amount=data.get("discount_amount", 0),
+                cost_price=data.get("cost_price", 0),
                 stock=data.get("stock", 0), is_default=is_default,
                 is_active=data.get("is_active", True), weight=data.get("weight"),
                 height=data.get("height"), width=data.get("width"), depth=data.get("depth"),

@@ -6,6 +6,7 @@ Everything else moved to related models
 """
 
 import uuid
+import secrets
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.utils.translation import gettext_lazy as _
@@ -32,6 +33,7 @@ class User(AbstractUser):
 
     # Core identity
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user_code = models.CharField(max_length=36, unique=True, editable=False, blank=True)
     email = models.EmailField(_("email"), unique=True, db_index=True)
 
     # Username optional
@@ -104,8 +106,18 @@ class User(AbstractUser):
     def can_access_admin(self):
         return self.is_admin() or (self.is_staff_member() and self.is_staff)
 
+    @staticmethod
+    def _new_user_code():
+        alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        while True:
+            code = "USR-" + "".join(secrets.choice(alphabet) for _ in range(12))
+            if not User.objects.filter(user_code=code).exists():
+                return code
+
     def save(self, *args, **kwargs):
         """Auto-update is_guest based on password status"""
+        if not self.user_code:
+            self.user_code = self._new_user_code()
         if self.pk:
             old_user = User.objects.filter(pk=self.pk).first()
             if old_user:
