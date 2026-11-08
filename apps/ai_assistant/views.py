@@ -151,9 +151,16 @@ def admin_assistant_chat(request):
                 or not isinstance(item.get("text"), str) or len(item["text"]) > 4000
                 for item in history)):
         return APIResponse.bad_request("Invalid conversation history.")
+    media_ids = request.json_data.get("media_ids", [])
+    if (not isinstance(media_ids, list) or len(media_ids) > 10 or
+            any(not isinstance(value, str) or not value for value in media_ids) or
+            len(set(media_ids)) != len(media_ids)):
+        return APIResponse.bad_request("Choose up to 10 distinct attached images.")
     try:
-        result = AdminAssistantService.send_message(request.user, message, history)
+        result = AdminAssistantService.send_message(request.user, message, history, media_ids)
         return APIResponse.success(data=result)
+    except ValueError as exc:
+        return APIResponse.bad_request(str(exc))
     except Exception:
         logger.exception("Admin assistant failed for user %s", request.user.pk)
         return APIResponse.server_error("The admin assistant is temporarily unavailable.")

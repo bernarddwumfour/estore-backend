@@ -7,6 +7,8 @@ from uuid import uuid4
 from django.core.cache import cache
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
+from django.core.files.base import ContentFile
+from django.core.exceptions import ValidationError
 
 from apps.blog.models import BlogPost
 from apps.blog.schemas import validate_post
@@ -17,6 +19,7 @@ from apps.products.services.review_service import AdminReviewService
 from apps.promotions.models import DiscountCode, Promotion
 from apps.promotions.schemas import validate_discount_code_upsert, validate_promotion_create
 from apps.promotions.services import PromotionService
+from apps.social.models import SocialMedia
 from apps.users.models import Affiliate
 
 User = get_user_model()
@@ -32,12 +35,13 @@ ALLOWED_ACTIONS = {
 
 class AdminMarketingActionService:
     @staticmethod
-    def prepare(user, *, entity, action, ids=None, data=None, review_type=None):
+    def prepare(user, *, entity, action, ids=None, data=None, review_type=None, media_ids=None):
         if not user.is_active or user.role not in {User.ROLE_ADMIN, User.ROLE_STAFF}:
             return None, {"permission": "Admin access required"}
         if entity not in ALLOWED_ACTIONS or action not in ALLOWED_ACTIONS.get(entity, set()):
             return None, {"action": "Unsupported marketing action"}
         data = data or {}
+        media_ids = media_ids or []
         is_create = action == "create" and entity in {"promotion", "discount_code", "blog_post"}
         if is_create:
             ids = []
@@ -50,6 +54,30 @@ class AdminMarketingActionService:
 
         payload = {"entity": entity, "action": action, "ids": ids}
         if is_create:
+            cover_media_id = data.pop("cover_media_id", None)
+            if entity == "promotion" and (not isinstance(media_ids, list) or len(media_ids) > 10):
+                return None, {"media_ids": "Choose up to 10 promotion images"}
+            if entity != "promotion" and media_ids:
+                return None, {"media_ids": "Images are only accepted for promotions"}
+            selected_media_ids = list(media_ids)
+            if entity == "blog_post" and cover_media_id:
+                selected_media_ids.append(cover_media_id)
+            if len(selected_media_ids) != len(set(selected_media_ids)):
+                return None, {"media_ids": "Choose distinct images"}
+            media = {}
+            if selected_media_ids:
+                if any(not isinstance(value, str) for value in selected_media_ids):
+                    return None, {"media_ids": "Invalid image selection"}
+                try:
+                    media = {str(item.pk): item for item in SocialMedia.objects.filter(
+                        pk__in=selected_media_ids, media_type=SocialMedia.TYPE_IMAGE,
+                    )}
+                except (TypeError, ValueError, ValidationError):
+                    return None, {"media_ids": "One or more selected image IDs are invalid"}
+                if len(media) != len(selected_media_ids) or any(not item.url for item in media.values()):
+                    return None, {"media_ids": "One or more selected images are unavailable"}
+            if entity == "blog_post" and cover_media_id:
+                data["cover_image_url"] = media[cover_media_id].url
             if entity == "promotion":
                 cleaned, errors = validate_promotion_create(data)
             elif entity == "discount_code":
@@ -87,6 +115,8 @@ class AdminMarketingActionService:
                 paragraphs = [part.strip() for part in cleaned["content"].splitlines() if part.strip()]
                 cleaned["content"] = "".join(f"<p>{escape(paragraph)}</p>" for paragraph in paragraphs)
             payload["data"] = cleaned
+            if entity == "promotion":
+                payload["media_ids"] = selected_media_ids
             model = None
         elif entity == "promotion":
             model = Promotion
@@ -110,12 +140,15 @@ class AdminMarketingActionService:
         action_id = str(uuid4())
         cache.set(f"{ACTION_KEY_PREFIX}{action_id}",
                   {"user_id": str(user.pk), "payload": payload}, ACTION_TTL_SECONDS)
+        review_data = dict(payload.get("data", {}))
+        if is_create and entity == "promotion":
+            review_data["image_count"] = len(payload.get("media_ids", []))
         pending = {
             "action_id": action_id,
             "action": f"{entity}_{action}",
             "details": {
                 "target_id": "",
-                "data": payload.get("data", {}),
+                "data": review_data,
                 "ids": ids,
                 "bulk_action": action,
             },
@@ -138,7 +171,19 @@ class AdminMarketingActionService:
         payload = record["payload"]
         entity, action, ids = payload["entity"], payload["action"], payload["ids"]
         if action == "create" and entity == "promotion":
-            result, errors = PromotionService.create_promotion(payload["data"], user=user)
+            image_files = []
+            for media in SocialMedia.objects.filter(
+                pk__in=payload.get("media_ids", []), media_type=SocialMedia.TYPE_IMAGE,
+            ):
+                media.file.open("rb")
+                try:
+                    image_files.append(ContentFile(media.file.read(), name=media.file.name.rsplit("/", 1)[-1]))
+                finally:
+                    media.file.close()
+            if len(image_files) != len(payload.get("media_ids", [])):
+                cache.delete(key)
+                return None, {"media_ids": "One or more selected images are no longer available"}
+            result, errors = PromotionService.create_promotion(payload["data"], image_files, user)
             if result:
                 result = {"id": str(result.pk), "name": result.name, "status": result.status}
         elif action == "create" and entity == "discount_code":

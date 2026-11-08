@@ -3,10 +3,12 @@
 import json
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from django.core.exceptions import ValidationError
 
 from apps.ai_assistant.agents.admin.builder import get_admin_graph
 from apps.ai_assistant.services.assistant_service import AssistantService
 from apps.ai_assistant.services.admin_user_action_service import AdminUserActionService
+from apps.social.models import SocialMedia
 
 
 LIST_TOOL_TABLES = {
@@ -74,7 +76,7 @@ def _list_table(tool_name, payload):
 
 class AdminAssistantService:
     @staticmethod
-    def send_message(user, message, history=None):
+    def send_message(user, message, history=None, media_ids=None):
         if not user.is_active or user.role not in {user.ROLE_ADMIN, user.ROLE_STAFF}:
             raise PermissionError("Admin access required.")
         messages = []
@@ -83,7 +85,22 @@ class AdminAssistantService:
                 messages.append(HumanMessage(content=item["text"]))
             else:
                 messages.append(AIMessage(content=item["text"]))
-        messages.append(HumanMessage(content=message.strip()))
+        media_ids = media_ids or []
+        attached = []
+        if media_ids:
+            try:
+                attached = list(SocialMedia.objects.filter(
+                    pk__in=media_ids, media_type=SocialMedia.TYPE_IMAGE,
+                ))
+            except (TypeError, ValueError, ValidationError):
+                attached = []
+            if len(attached) != len(media_ids) or any(not item.url for item in attached):
+                raise ValueError("One or more attached images are unavailable.")
+        content = [{"type": "text", "text": message.strip()}]
+        for media in attached:
+            content[0]["text"] += f"\nAttached image ID: {media.pk}; name: {media.name}"
+            content.append({"type": "image_url", "image_url": {"url": media.url}})
+        messages.append(HumanMessage(content=content if attached else message.strip()))
         result = get_admin_graph().invoke(
             {"messages": messages},
             config={"configurable": {"authenticated_user_id": str(user.pk)},

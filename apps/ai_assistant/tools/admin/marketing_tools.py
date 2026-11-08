@@ -193,6 +193,7 @@ class CreatePromotionInput(BaseModel):
     starts_at: datetime
     ends_at: datetime | None = None
     items: list[PromotionItemInput] = Field(min_length=1, max_length=20)
+    image_ids: list[str] = Field(default_factory=list, max_length=10, description="IDs of uploaded images attached to this chat")
     meta_title: str = ""
     meta_description: str = ""
 
@@ -201,7 +202,7 @@ class CreatePromotionInput(BaseModel):
 def prepare_admin_promotion_create(name: str, bundle_price: float, starts_at: datetime,
                                    items: list[dict], description: str = "",
                                    ends_at: datetime | None = None, meta_title: str = "",
-                                   meta_description: str = "",
+                                   meta_description: str = "", image_ids: list[str] | None = None,
                                    config: RunnableConfig = None) -> str:
     """Prepare a bundle promotion from existing variant IDs; it is created only after confirmation."""
     admin = _admin(config or {})
@@ -212,7 +213,7 @@ def prepare_admin_promotion_create(name: str, bundle_price: float, starts_at: da
             "name": name, "bundle_price": bundle_price, "starts_at": starts_at,
             "ends_at": ends_at, "items": items, "description": description,
             "meta_title": meta_title, "meta_description": meta_description,
-        },
+        }, media_ids=image_ids or [],
     )
     return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
 
@@ -260,6 +261,7 @@ class CreateBlogPostInput(BaseModel):
     excerpt: str = Field(default="", max_length=300)
     category_id: str | None = None
     cover_image_url: str = Field(default="", max_length=500)
+    cover_media_id: str | None = Field(default=None, description="ID of an image attached to this chat; preferred for the cover")
     author_name: str = Field(default="Store Team", max_length=120)
     status: Literal["draft", "published", "archived"] = "draft"
     is_featured: bool = False
@@ -271,6 +273,7 @@ class CreateBlogPostInput(BaseModel):
 def prepare_admin_blog_post_create(title: str, content: str, excerpt: str = "",
                                    category_id: str | None = None,
                                    cover_image_url: str = "", author_name: str = "Store Team",
+                                   cover_media_id: str | None = None,
                                    status: str = "draft", is_featured: bool = False,
                                    meta_title: str = "", meta_description: str = "",
                                    config: RunnableConfig = None) -> str:
@@ -282,6 +285,7 @@ def prepare_admin_blog_post_create(title: str, content: str, excerpt: str = "",
         admin, entity="blog_post", action="create", data={
             "title": title, "content": content, "excerpt": excerpt,
             "category_id": category_id, "cover_image_url": cover_image_url,
+            "cover_media_id": cover_media_id,
             "author_name": author_name, "status": status, "is_featured": is_featured,
             "meta_title": meta_title, "meta_description": meta_description,
         },
