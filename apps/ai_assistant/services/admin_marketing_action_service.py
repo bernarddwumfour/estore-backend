@@ -54,7 +54,9 @@ class AdminMarketingActionService:
                 return None, {"ids": "IDs must be distinct non-empty strings"}
 
         payload = {"entity": entity, "action": action, "ids": ids}
+        preview = None
         if is_create:
+            blog_plain_content = data.get("content", "") if entity == "blog_post" else ""
             cover_media_id = data.pop("cover_media_id", None)
             if entity == "promotion" and (not isinstance(media_ids, list) or len(media_ids) > 10):
                 return None, {"media_ids": "Choose up to 10 promotion images"}
@@ -95,10 +97,32 @@ class AdminMarketingActionService:
                 if len(variant_ids) != len(set(variant_ids)):
                     return None, {"items": "A variant can only appear once in a promotion"}
                 try:
-                    if ProductVariant.objects.filter(pk__in=variant_ids).count() != len(variant_ids):
+                    variants = {
+                        str(variant.pk): variant for variant in ProductVariant.objects
+                        .filter(pk__in=variant_ids).select_related("product").prefetch_related("images")
+                    }
+                    if len(variants) != len(variant_ids):
                         return None, {"items": "One or more variants were not found"}
                 except (ValueError, TypeError, ValidationError):
                     return None, {"items": "One or more variant IDs are invalid"}
+                preview_items = []
+                for item in cleaned["items"]:
+                    variant = variants[str(item["variant_id"])]
+                    first_image = next((image for image in variant.images.all() if image.is_active), None)
+                    preview_items.append({
+                        "product_title": variant.product.title,
+                        "sku": variant.sku,
+                        "quantity": item["quantity"],
+                        "is_free": item.get("is_free", False),
+                        "image_url": first_image.image.url if first_image else "",
+                    })
+                preview = {
+                    "type": "promotion", "name": cleaned["name"],
+                    "description": cleaned.get("description", ""),
+                    "bundle_price": str(cleaned["bundle_price"]),
+                    "image_urls": [media[item].url for item in selected_media_ids],
+                    "items": preview_items,
+                }
             elif entity == "discount_code":
                 if cleaned["discount_type"] == DiscountCode.TYPE_PERCENTAGE and cleaned["value"] > 100:
                     return None, {"value": "Percentage discounts cannot exceed 100"}
@@ -118,6 +142,14 @@ class AdminMarketingActionService:
                     return None, {"cover_image_url": "Cover images must use an HTTP or HTTPS URL"}
                 paragraphs = [part.strip() for part in cleaned["content"].splitlines() if part.strip()]
                 cleaned["content"] = "".join(f"<p>{escape(paragraph)}</p>" for paragraph in paragraphs)
+                preview = {
+                    "type": "blog_post", "title": cleaned["title"],
+                    "excerpt": cleaned.get("excerpt", ""),
+                    "content": blog_plain_content,
+                    "cover_image_url": cleaned.get("cover_image_url", ""),
+                    "author_name": cleaned.get("author_name", ""),
+                    "status": cleaned.get("status", "draft"),
+                }
             payload["data"] = cleaned
             if entity == "promotion":
                 payload["media_ids"] = selected_media_ids
@@ -153,6 +185,7 @@ class AdminMarketingActionService:
             "details": {
                 "target_id": "",
                 "data": review_data,
+                "preview": preview,
                 "ids": ids,
                 "bulk_action": action,
             },
