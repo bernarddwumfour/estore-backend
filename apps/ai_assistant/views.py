@@ -11,6 +11,7 @@ from estore.utils.responses import APIResponse
 from apps.users.decorators.auth import (
     json_request_required,
     jwt_required,
+    jwt_optional,
     role_required,
 )
 from apps.ai_assistant.services.admin_assistant_service import AdminAssistantService
@@ -251,6 +252,33 @@ def assistant_chat(request):
         return APIResponse.server_error(
             message="The shopping assistant is temporarily unavailable."
         )
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_optional
+@json_request_required
+@ratelimit(key="ip", rate="20/h", method="POST", block=True)
+def guest_assistant_chat(request):
+    """Public, read-only shopping chat. Guest history is supplied by the client and not persisted."""
+    data = request.json_data
+    message = data.get("message")
+    if not isinstance(message, str) or not message.strip() or len(message) > 4000:
+        return APIResponse.bad_request("A message of 1 to 4000 characters is required.")
+    history = data.get("history", [])
+    if (not isinstance(history, list) or len(history) > 12 or
+            any(not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
+                or not isinstance(item.get("content"), str) or len(item["content"]) > 4000
+                for item in history)):
+        return APIResponse.bad_request("Invalid guest conversation history.")
+    try:
+        result = AssistantService.send_guest_message(message, history)
+        return APIResponse.success(data=result)
+    except ValueError as exc:
+        return APIResponse.bad_request(str(exc))
+    except Exception:
+        logger.exception("Guest assistant request failed")
+        return APIResponse.server_error("The shopping assistant is temporarily unavailable.")
 
 
 @csrf_exempt

@@ -1,5 +1,6 @@
 
 import json
+from uuid import uuid4
 
 from django.core.exceptions import ValidationError
 from django.db import transaction
@@ -20,6 +21,7 @@ from apps.ai_assistant.models import (
 from apps.ai_assistant.agents.shopper.builder import (
     get_shopper_graph,
 )
+from apps.ai_assistant.agents.guest.builder import get_guest_graph
 
 
 
@@ -31,6 +33,59 @@ class AssistantService:
     Manage shopper conversations and invoke the
     existing LangGraph assistant.
     """
+
+    @classmethod
+    def send_guest_message(cls, message, history=None):
+        """Run the public-only guest graph without creating an account conversation."""
+        message = message.strip()
+        if not message:
+            raise ValueError("Message cannot be empty.")
+        messages = []
+        for item in (history or [])[-12:]:
+            if item["role"] == "user":
+                messages.append(HumanMessage(content=item["content"]))
+            else:
+                messages.append(AIMessage(content=item["content"]))
+        messages.append(HumanMessage(content=message))
+
+        result = get_guest_graph().invoke(
+            {"messages": messages}, config={"recursion_limit": 12},
+        )
+        response_text = cls._extract_text(result["messages"][-1])
+        if not response_text.strip():
+            raise RuntimeError("The assistant returned an empty response.")
+        return {
+            "conversation_id": None,
+            "message_id": str(uuid4()),
+            "response": response_text,
+            "products": cls._extract_products(result["messages"], response_text=response_text),
+            "promotions": cls._extract_guest_promotions(result["messages"]),
+            "order_draft": None,
+            "order_tracking": None,
+            "requires_shipping_address": False,
+            "created_at": timezone.now().isoformat(),
+        }
+
+    @staticmethod
+    def _extract_guest_promotions(messages):
+        promotions_by_slug = {}
+        allowed_tools = {"search_active_promotions", "get_public_promotion_details"}
+        for message in messages:
+            if not isinstance(message, ToolMessage) or message.name not in allowed_tools:
+                continue
+            try:
+                result = json.loads(message.content)
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+            if result.get("success") is not True:
+                continue
+            promotions = result.get("promotions") or []
+            if isinstance(result.get("promotion"), dict):
+                promotions = [*promotions, result["promotion"]]
+            for promotion in promotions:
+                if isinstance(promotion, dict) and promotion.get("slug"):
+                    promotions_by_slug[promotion["slug"]] = promotion
+        return list(promotions_by_slug.values())[:10]
 
     @staticmethod
     def _get_conversation(user, conversation_id=None):

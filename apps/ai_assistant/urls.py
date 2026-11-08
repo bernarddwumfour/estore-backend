@@ -7,6 +7,7 @@ app_name = "ai_assistant"
 
 urlpatterns = [
     path("chat/", views.assistant_chat, name="assistant-chat"),
+    path("guest/chat/", views.guest_assistant_chat, name="guest-assistant-chat"),
     path("admin/chat/", views.admin_assistant_chat, name="admin-assistant-chat"),
     path("admin/actions/prepare/", views.prepare_admin_product_bulk_action,
          name="prepare-admin-product-bulk-action"),
