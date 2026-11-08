@@ -173,6 +173,7 @@ def serialize_assistant_variant(
 
     return {
         "id": str(variant_id),
+        "slug": variant.get("slug"),
         "sku": str(sku),
         "attributes": variant.get("attributes") or {},
         "price": variant.get("price"),

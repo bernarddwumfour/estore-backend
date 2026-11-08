@@ -277,6 +277,7 @@ class AssistantService:
                         )
                         variants.append({
                             "id": str(variant_id),
+                            "slug": variant.get("slug"),
                             "sku": str(sku),
                             "attributes": (
                                 variant.get("attributes") or {}
