@@ -8,7 +8,6 @@ from django.core.cache import cache
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
-from django.core.exceptions import ValidationError
 
 from apps.blog.models import BlogPost
 from apps.blog.schemas import validate_post
@@ -55,6 +54,7 @@ class AdminMarketingActionService:
 
         payload = {"entity": entity, "action": action, "ids": ids}
         preview = None
+        display_ids = list(ids)
         if is_create:
             blog_plain_content = data.get("content", "") if entity == "blog_post" else ""
             cover_media_id = data.pop("cover_media_id", None)
@@ -93,6 +93,7 @@ class AdminMarketingActionService:
             if errors:
                 return None, errors
             if entity == "promotion":
+                cleaned["promotion_code"] = Promotion.generate_promotion_code()
                 variant_ids = [str(item["variant_id"]) for item in cleaned["items"]]
                 if len(variant_ids) != len(set(variant_ids)):
                     return None, {"items": "A variant can only appear once in a promotion"}
@@ -117,7 +118,8 @@ class AdminMarketingActionService:
                         "image_url": first_image.image.url if first_image else "",
                     })
                 preview = {
-                    "type": "promotion", "name": cleaned["name"],
+                    "type": "promotion", "public_id": cleaned["promotion_code"],
+                    "name": cleaned["name"],
                     "description": cleaned.get("description", ""),
                     "bundle_price": str(cleaned["bundle_price"]),
                     "image_urls": [media[item].url for item in selected_media_ids],
@@ -137,13 +139,15 @@ class AdminMarketingActionService:
                     except TypeError:
                         return None, {"dates": "Start and end dates must use compatible time zones"}
             elif entity == "blog_post":
+                cleaned["post_code"] = BlogPost.generate_post_code()
                 cover_url = cleaned.get("cover_image_url", "").strip()
                 if cover_url and urlsplit(cover_url).scheme not in {"http", "https"}:
                     return None, {"cover_image_url": "Cover images must use an HTTP or HTTPS URL"}
                 paragraphs = [part.strip() for part in cleaned["content"].splitlines() if part.strip()]
                 cleaned["content"] = "".join(f"<p>{escape(paragraph)}</p>" for paragraph in paragraphs)
                 preview = {
-                    "type": "blog_post", "title": cleaned["title"],
+                    "type": "blog_post", "public_id": cleaned["post_code"],
+                    "title": cleaned["title"],
                     "excerpt": cleaned.get("excerpt", ""),
                     "content": blog_plain_content,
                     "cover_image_url": cleaned.get("cover_image_url", ""),
@@ -167,11 +171,19 @@ class AdminMarketingActionService:
             payload["review_type"] = review_type
 
         if not is_create:
+            public_code_field = {"promotion": "promotion_code", "blog_post": "post_code"}.get(entity)
+            if public_code_field:
+                code_to_pk = {
+                    getattr(item, public_code_field): str(item.pk)
+                    for item in model.objects.filter(**{f"{public_code_field}__in": ids})
+                }
+                ids = [code_to_pk.get(value, value) for value in ids]
             try:
                 if model.objects.filter(pk__in=ids).count() != len(ids):
                     return None, {"ids": "One or more selected records were not found"}
             except (ValueError, TypeError, ValidationError):
                 return None, {"ids": "One or more IDs are invalid"}
+            payload["ids"] = ids
 
         action_id = str(uuid4())
         cache.set(f"{ACTION_KEY_PREFIX}{action_id}",
@@ -179,6 +191,7 @@ class AdminMarketingActionService:
         review_data = dict(payload.get("data", {}))
         if is_create and entity == "promotion":
             review_data["image_count"] = len(payload.get("media_ids", []))
+            review_data["items"] = preview["items"]
         pending = {
             "action_id": action_id,
             "action": f"{entity}_{action}",
@@ -186,7 +199,7 @@ class AdminMarketingActionService:
                 "target_id": "",
                 "data": review_data,
                 "preview": preview,
-                "ids": ids,
+                "ids": display_ids,
                 "bulk_action": action,
             },
             "expires_in_seconds": ACTION_TTL_SECONDS,
@@ -222,7 +235,7 @@ class AdminMarketingActionService:
                 return None, {"media_ids": "One or more selected images are no longer available"}
             result, errors = PromotionService.create_promotion(payload["data"], image_files, user)
             if result:
-                result = {"id": str(result.pk), "name": result.name, "status": result.status}
+                result = {"promotion_id": result.promotion_code, "name": result.name, "status": result.status}
         elif action == "create" and entity == "discount_code":
             result, errors = PromotionService.create_discount_code(payload["data"], user)
             if result:
@@ -231,7 +244,7 @@ class AdminMarketingActionService:
         elif action == "create" and entity == "blog_post":
             result, errors = BlogPostService.create_post(payload["data"], user=user)
             if result:
-                result = {"id": str(result.pk), "title": result.title, "slug": result.slug,
+                result = {"blog_id": result.post_code, "title": result.title, "slug": result.slug,
                           "status": result.status}
         elif entity == "promotion":
             result, errors = PromotionService.bulk_action_promotions(ids, action, user)

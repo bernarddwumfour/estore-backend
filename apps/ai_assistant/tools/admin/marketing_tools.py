@@ -15,6 +15,7 @@ from apps.blog.models import BlogPost
 from apps.blog.schemas import serialize_post
 from apps.blog.selectors import list_posts
 from apps.products.services.review_service import AdminReviewService
+from apps.promotions.models import Promotion
 from apps.promotions.schemas import serialize_promotion
 from apps.promotions.selectors import get_admin_discount_codes, get_admin_promotions
 
@@ -57,12 +58,76 @@ def search_admin_promotions(search: str | None = None, status: str | None = None
     results = []
     for promotion in promotions:
         item = serialize_promotion(promotion, is_admin=True)
-        results.append({key: item.get(key) for key in (
-            "id", "name", "slug", "description", "bundle_price", "original_total",
+        result = {key: item.get(key) for key in (
+            "name", "slug", "description", "bundle_price", "original_total",
             "savings_amount", "savings_percentage", "starts_at", "ends_at", "items",
             "free_items", "images", "has_stock", "status",
-        )})
+        )}
+        result["promotion_code"] = promotion.promotion_code
+        result["id"] = promotion.promotion_code
+        result["items"] = [
+            {key: value for key, value in entry.items() if key != "variant_id"}
+            for entry in result["items"]
+        ]
+        result["free_items"] = [
+            {key: value for key, value in entry.items() if key != "variant_id"}
+            for entry in result["free_items"]
+        ]
+        result["images"] = [{key: value for key, value in image.items() if key != "id"}
+                             for image in result["images"]]
+        results.append(result)
     return _reply(config, {"promotions": results, "total": total, "pagination": pagination})
+
+
+class PromotionDetailsInput(BaseModel):
+    identifier: str = Field(min_length=1, max_length=220, description="Readable promotion ID (PRM-...) or exact name/slug")
+
+
+@tool(args_schema=PromotionDetailsInput)
+def get_admin_promotion_details(identifier: str, config: RunnableConfig = None) -> str:
+    """Get the complete details and images for one promotion by readable ID, exact name, or slug."""
+    if not _admin(config or {}):
+        return _reply(config)
+    matches = list(Promotion.objects.filter(promotion_code__iexact=identifier).prefetch_related(
+        "items__variant__product", "items__variant__images", "images",
+    )[:2])
+    if not matches:
+        matches = list(Promotion.objects.filter(slug__iexact=identifier).prefetch_related(
+            "items__variant__product", "items__variant__images", "images",
+        )[:2])
+    if not matches:
+        matches = list(Promotion.objects.filter(name__iexact=identifier).prefetch_related(
+            "items__variant__product", "items__variant__images", "images",
+        )[:2])
+    if not matches:
+        return _reply(config, error="Promotion not found. Search by promotion ID or name.")
+    if len(matches) > 1:
+        return _reply(config, error="More than one promotion has that name. Use its readable promotion ID.")
+    promotion = matches[0]
+    serialized = serialize_promotion(promotion, is_admin=True)
+    items = [*serialized["items"], *serialized["free_items"]]
+    safe_items = [{key: value for key, value in item.items() if key != "variant_id"}
+                  for item in items]
+    detail = {
+        "entity": "promotion", "public_id": promotion.promotion_code,
+        "preview": {
+            "type": "promotion", "public_id": promotion.promotion_code,
+            "name": promotion.name, "description": promotion.description,
+            "bundle_price": str(promotion.bundle_price),
+            "image_urls": [image["url"] for image in serialized["images"]],
+            "items": [{
+                "product_title": item.get("product_title", ""), "sku": item.get("sku", ""),
+                "quantity": item.get("quantity", 1), "is_free": item.get("is_free", False),
+                "image_url": item.get("image", ""),
+            } for item in safe_items],
+        },
+        "fields": {key: value for key, value in serialized.items() if key not in {
+            "id", "name", "slug", "description", "bundle_price", "items", "free_items",
+            "images", "created_by",
+        }},
+        "items": safe_items,
+    }
+    return json.dumps({"success": True, "detail": detail}, default=str)
 
 
 class DiscountCodeSearchInput(BaseModel):
@@ -121,11 +186,62 @@ def search_admin_blog_posts(search: str | None = None, status: str | None = None
     results = []
     for post in posts:
         item = serialize_post(post, is_admin=True)
-        results.append({key: item.get(key) for key in (
-            "id", "title", "slug", "excerpt", "cover_image_url", "category",
+        result = {key: item.get(key) for key in (
+            "title", "slug", "excerpt", "cover_image_url", "category",
             "is_featured", "published_at", "status",
-        )})
+        )}
+        result["post_code"] = post.post_code
+        result["id"] = post.post_code
+        if result["category"]:
+            result["category"] = {key: value for key, value in result["category"].items() if key != "id"}
+        results.append(result)
     return _reply(config, {"posts": results, "total": total, "pagination": pagination})
+
+
+class BlogPostDetailsInput(BaseModel):
+    identifier: str = Field(min_length=1, max_length=220, description="Readable blog ID (BLG-...) or exact title/slug")
+
+
+@tool(args_schema=BlogPostDetailsInput)
+def get_admin_blog_post_details(identifier: str, config: RunnableConfig = None) -> str:
+    """Get the full article, cover image, publishing state, and metadata for one blog post."""
+    if not _admin(config or {}):
+        return _reply(config)
+    matches = list(BlogPost.objects.filter(post_code__iexact=identifier).select_related(
+        "category", "author_user",
+    )[:2])
+    if not matches:
+        matches = list(BlogPost.objects.filter(slug__iexact=identifier).select_related(
+            "category", "author_user",
+        )[:2])
+    if not matches:
+        matches = list(BlogPost.objects.filter(title__iexact=identifier).select_related(
+            "category", "author_user",
+        )[:2])
+    if not matches:
+        return _reply(config, error="Blog post not found. Search by blog ID or title.")
+    if len(matches) > 1:
+        return _reply(config, error="More than one blog post has that title. Use its readable blog ID.")
+    post = matches[0]
+    from django.utils.html import strip_tags
+    plain_content = strip_tags(re.sub(r"</(p|div|li|h[1-6])>", "\n\n", post.content, flags=re.IGNORECASE))
+    detail = {
+        "entity": "blog_post", "public_id": post.post_code,
+        "preview": {
+            "type": "blog_post", "public_id": post.post_code,
+            "title": post.title, "excerpt": post.excerpt,
+            "content": plain_content, "cover_image_url": post.cover_image_url,
+            "author_name": post.author_display_name, "status": post.status,
+        },
+        "fields": {
+            "slug": post.slug, "category": post.category.name if post.category else "",
+            "is_featured": post.is_featured,
+            "published_at": post.published_at.isoformat() if post.published_at else None,
+            "created_at": post.created_at.isoformat(), "updated_at": post.updated_at.isoformat(),
+            "meta_title": post.meta_title, "meta_description": post.meta_description,
+        },
+    }
+    return json.dumps({"success": True, "detail": detail}, default=str)
 
 
 class ReviewSearchInput(BaseModel):

@@ -171,6 +171,7 @@ def serialize_post(post: BlogPost, is_admin: bool = False) -> Dict[str, Any]:
     """Serialize a single blog post."""
     data: Dict[str, Any] = {
         "id": str(post.id),
+        "post_code": post.post_code,
         "title": post.title,
         "slug": post.slug,
         "excerpt": post.excerpt,

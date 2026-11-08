@@ -184,6 +184,7 @@ def serialize_promotion(
     
     data = {
         "id": str(promotion.id),
+        "promotion_code": promotion.promotion_code,
         "name": promotion.name,
         "slug": promotion.slug,
         "description": promotion.description,

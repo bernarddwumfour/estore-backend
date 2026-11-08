@@ -1,6 +1,7 @@
 """Blog models — categories and posts with flexible authorship."""
 
 import uuid
+import secrets
 
 from django.conf import settings
 from django.db import models
@@ -44,6 +45,7 @@ class BlogPost(models.Model):
     ]
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    post_code = models.CharField(max_length=16, unique=True, editable=False, blank=True)
     title = models.CharField(_("title"), max_length=200)
     slug = models.SlugField(_("slug"), max_length=220, unique=True)
     excerpt = models.CharField(_("excerpt"), max_length=300, blank=True)
@@ -105,11 +107,21 @@ class BlogPost(models.Model):
         ]
 
     def save(self, *args, **kwargs):
+        if not self.post_code:
+            self.post_code = self.generate_post_code()
         # Auto-set published_at the first time status transitions to published.
         # The service layer also handles this explicitly — this is a safety net.
         if self.status == self.STATUS_PUBLISHED and not self.published_at:
             self.published_at = timezone.now()
         super().save(*args, **kwargs)
+
+    @classmethod
+    def generate_post_code(cls):
+        alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        while True:
+            code = "BLG-" + "".join(secrets.choice(alphabet) for _ in range(12))
+            if not cls.objects.filter(post_code=code).exists():
+                return code
 
     @property
     def author_display_name(self) -> str:

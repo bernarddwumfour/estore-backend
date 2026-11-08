@@ -99,6 +99,7 @@ class PromotionService:
             # Create promotion
             promotion = Promotion.objects.create(
                 name=data["name"],
+                promotion_code=data.get("promotion_code", ""),
                 slug=slug,
                 description=data.get("description", ""),
                 bundle_price=Decimal(str(data["bundle_price"])),

@@ -37,7 +37,7 @@ LIST_TOOL_TABLES = {
         ("is_active", "Active"), ("is_approved", "Approved"), ("level", "Level"),
     ]),
     "search_admin_promotions": ("Promotions", "promotions", [
-        ("name", "Promotion"), ("status", "Status"), ("bundle_price", "Bundle price"),
+        ("promotion_code", "Promotion ID"), ("name", "Promotion"), ("status", "Status"), ("bundle_price", "Bundle price"),
         ("savings_amount", "Savings"), ("has_stock", "Has stock"),
     ]),
     "search_admin_discount_codes": ("Discount codes", "discount_codes", [
@@ -45,7 +45,7 @@ LIST_TOOL_TABLES = {
         ("value", "Value"), ("is_active", "Active"), ("is_affiliate_code", "Affiliate code"),
     ]),
     "search_admin_blog_posts": ("Blog posts", "posts", [
-        ("title", "Title"), ("status", "Status"), ("category.name", "Category"),
+        ("post_code", "Blog ID"), ("title", "Title"), ("status", "Status"), ("category.name", "Category"),
         ("is_featured", "Featured"), ("published_at", "Published"),
     ]),
     "search_admin_reviews": ("Reviews", "reviews", [
@@ -114,6 +114,7 @@ class AdminAssistantService:
             raise RuntimeError("Empty admin agent response")
         pending_actions = []
         tables = []
+        details = []
         for message in result["messages"]:
             if not isinstance(message, ToolMessage):
                 continue
@@ -124,6 +125,8 @@ class AdminAssistantService:
             table = _list_table(getattr(message, "name", ""), payload)
             if table:
                 tables.append(table)
+            if payload.get("success") and payload.get("detail"):
+                details.append(payload["detail"])
             if payload.get("success") and payload.get("pending_action"):
                 pending = payload["pending_action"]
                 if pending.get("action") == "update_user":
@@ -134,4 +137,5 @@ class AdminAssistantService:
                         pending_actions.append(client_preview)
                     continue
                 pending_actions.append(pending)
-        return {"response": answer, "pending_actions": pending_actions, "tables": tables}
+        return {"response": answer, "pending_actions": pending_actions, "tables": tables,
+                "details": details}

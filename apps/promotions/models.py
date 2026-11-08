@@ -6,6 +6,7 @@ Promotions models - Bundle deals and offers
 """
 
 import uuid
+import secrets
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 from django.core.validators import MinValueValidator, MaxValueValidator
@@ -31,6 +32,7 @@ class Promotion(models.Model):
     ]
     
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    promotion_code = models.CharField(max_length=16, unique=True, editable=False, blank=True)
     
     # Basic information
     name = models.CharField(_("name"), max_length=200)
@@ -86,6 +88,19 @@ class Promotion(models.Model):
     
     def __str__(self):
         return self.name
+
+    @classmethod
+    def generate_promotion_code(cls):
+        alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+        while True:
+            code = "PRM-" + "".join(secrets.choice(alphabet) for _ in range(12))
+            if not cls.objects.filter(promotion_code=code).exists():
+                return code
+
+    def save(self, *args, **kwargs):
+        if not self.promotion_code:
+            self.promotion_code = self.generate_promotion_code()
+        super().save(*args, **kwargs)
     
     @property
     def is_currently_active(self) -> bool:

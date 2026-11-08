@@ -77,6 +77,7 @@ class BlogPostService:
 
             post = BlogPost.objects.create(
                 title=title,
+                post_code=data.get("post_code", ""),
                 slug=slug,
                 excerpt=data.get("excerpt", ""),
                 content=content,
