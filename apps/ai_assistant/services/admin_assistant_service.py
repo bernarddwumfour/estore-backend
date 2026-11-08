@@ -130,14 +130,14 @@ class AdminAssistantService:
         pending_actions = []
         tables = []
         details = []
-        for message in result["messages"]:
-            if not isinstance(message, ToolMessage):
+        for graph_message in result["messages"]:
+            if not isinstance(graph_message, ToolMessage):
                 continue
             try:
-                payload = json.loads(message.content)
+                payload = json.loads(graph_message.content)
             except (TypeError, ValueError):
                 continue
-            table = _list_table(getattr(message, "name", ""), payload)
+            table = _list_table(getattr(graph_message, "name", ""), payload)
             if table:
                 tables.append(table)
             if payload.get("success") and payload.get("detail"):
