@@ -147,6 +147,9 @@ def admin_assistant_chat(request):
     if not isinstance(message, str) or not message.strip() or len(message) > 4000:
         return APIResponse.bad_request("A message of 1 to 4000 characters is required.")
     history = request.json_data.get("history", [])
+    conversation_id = request.json_data.get("conversation_id")
+    if conversation_id is not None and (not isinstance(conversation_id, str) or len(conversation_id) > 36):
+        return APIResponse.bad_request("Invalid admin conversation ID.")
     if (not isinstance(history, list) or len(history) > 12 or
             any(not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
                 or not isinstance(item.get("text"), str) or len(item["text"]) > 4000
@@ -158,13 +161,51 @@ def admin_assistant_chat(request):
             len(set(media_ids)) != len(media_ids)):
         return APIResponse.bad_request("Choose up to 10 distinct attached images.")
     try:
-        result = AdminAssistantService.send_message(request.user, message, history, media_ids)
+        result = AdminAssistantService.send_message(
+            request.user, message, history, media_ids, conversation_id,
+        )
         return APIResponse.success(data=result)
     except ValueError as exc:
         return APIResponse.bad_request(str(exc))
     except Exception:
         logger.exception("Admin assistant failed for user %s", request.user.pk)
         return APIResponse.server_error("The admin assistant is temporarily unavailable.")
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key="user", rate="60/h", method="GET", block=True)
+def admin_assistant_conversations(request):
+    return APIResponse.success(data={"conversations": AdminAssistantService.list_conversations(request.user)})
+
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key="user", rate="60/h", method="GET", block=True)
+def admin_assistant_conversation_detail(request, conversation_id):
+    conversation = AdminAssistantService.get_conversation(request.user, conversation_id)
+    if conversation is None:
+        return APIResponse.not_found("Admin conversation not found.")
+    return APIResponse.success(data=conversation)
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@json_request_required
+@ratelimit(key="user", rate="60/h", method="POST", block=True)
+def append_admin_assistant_conversation_event(request, conversation_id):
+    content = request.json_data.get("content")
+    if not isinstance(content, str) or not content.strip() or len(content) > 4000:
+        return APIResponse.bad_request("A message of 1 to 4000 characters is required.")
+    if not AdminAssistantService.append_conversation_event(request.user, conversation_id, content.strip()):
+        return APIResponse.not_found("Admin conversation not found.")
+    return APIResponse.success(data={"saved": True})
 
 
 @csrf_exempt
@@ -192,6 +233,7 @@ def assistant_chat(request):
 
         message = data.get("message")
         conversation_id = data.get("conversation_id")
+        history = data.get("history", [])
 
         # Validate the message.
         if not isinstance(message, str) or not message.strip():
@@ -206,11 +248,18 @@ def assistant_chat(request):
                 message="Message cannot exceed 4000 characters."
             )
 
+        if (not isinstance(history, list) or len(history) > 12 or
+                any(not isinstance(item, dict) or item.get("role") not in {"user", "assistant"}
+                    or not isinstance(item.get("content"), str) or len(item["content"]) > 4000
+                    for item in history)):
+            return APIResponse.bad_request("Invalid conversation history.")
+
         # Process the message through the assistant service.
         result = AssistantService.send_message(
             user=user,
             message=message,
             conversation_id=conversation_id,
+            history=history,
         )
 
         duration = round(time.time() - start_time, 3)

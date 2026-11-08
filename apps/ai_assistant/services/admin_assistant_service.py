@@ -1,6 +1,8 @@
 """Invoke the admin graph for an authorized staff member."""
 
 import json
+from django.db import transaction
+from django.utils import timezone
 
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from django.core.exceptions import ValidationError
@@ -8,6 +10,7 @@ from django.core.exceptions import ValidationError
 from apps.ai_assistant.agents.admin.builder import get_admin_graph
 from apps.ai_assistant.services.assistant_service import AssistantService
 from apps.ai_assistant.services.admin_user_action_service import AdminUserActionService
+from apps.ai_assistant.models import AdminAssistantConversation, AdminAssistantMessage
 from apps.social.models import SocialMedia
 
 
@@ -76,11 +79,23 @@ def _list_table(tool_name, payload):
 
 class AdminAssistantService:
     @staticmethod
-    def send_message(user, message, history=None, media_ids=None):
+    def send_message(user, message, history=None, media_ids=None, conversation_id=None):
         if not user.is_active or user.role not in {user.ROLE_ADMIN, user.ROLE_STAFF}:
             raise PermissionError("Admin access required.")
+        conversation = None
+        if conversation_id:
+            try:
+                conversation = AdminAssistantConversation.objects.get(id=conversation_id, user=user)
+            except (AdminAssistantConversation.DoesNotExist, ValueError, ValidationError):
+                raise ValueError("Admin conversation not found.")
+        transcript = []
+        if conversation:
+            stored = list(conversation.messages.order_by("-created_at")[:12])
+            transcript = [{"role": item.role, "text": item.content} for item in reversed(stored)]
+        else:
+            transcript = (history or [])[-12:]
         messages = []
-        for item in (history or [])[-12:]:
+        for item in transcript:
             if item["role"] == "user":
                 messages.append(HumanMessage(content=item["text"]))
             else:
@@ -137,5 +152,69 @@ class AdminAssistantService:
                         pending_actions.append(client_preview)
                     continue
                 pending_actions.append(pending)
-        return {"response": answer, "pending_actions": pending_actions, "tables": tables,
-                "details": details}
+        attachment_metadata = [{"id": str(item.pk), "url": item.url, "title": item.name, "type": "image"}
+                              for item in attached]
+        with transaction.atomic():
+            if conversation is None:
+                title = next((item["text"] for item in transcript if item["role"] == "user"), message.strip())
+                conversation = AdminAssistantConversation.objects.create(user=user, title=title[:200])
+                AdminAssistantMessage.objects.bulk_create([
+                    AdminAssistantMessage(conversation=conversation, role=item["role"], content=item["text"])
+                    for item in transcript
+                ])
+            AdminAssistantMessage.objects.create(
+                conversation=conversation,
+                role=AdminAssistantMessage.ROLE_USER,
+                content=message.strip(),
+                metadata={"attachments": attachment_metadata},
+            )
+            AdminAssistantMessage.objects.create(
+                conversation=conversation,
+                role=AdminAssistantMessage.ROLE_ASSISTANT,
+                content=answer,
+                metadata={"tables": tables, "details": details},
+            )
+            conversation.updated_at = timezone.now()
+            conversation.save(update_fields=["updated_at"])
+        return {
+            "response": answer, "pending_actions": pending_actions, "tables": tables,
+            "details": details,
+            "conversation": {"id": str(conversation.pk), "title": conversation.title},
+        }
+
+    @staticmethod
+    def list_conversations(user):
+        return [{"id": str(item.pk), "title": item.title,
+                 "updated_at": item.updated_at.isoformat()}
+                for item in AdminAssistantConversation.objects.filter(user=user).order_by("-updated_at")[:50]]
+
+    @staticmethod
+    def get_conversation(user, conversation_id):
+        try:
+            conversation = AdminAssistantConversation.objects.get(id=conversation_id, user=user)
+        except (AdminAssistantConversation.DoesNotExist, ValueError, ValidationError):
+            return None
+        return {
+            "id": str(conversation.pk), "title": conversation.title,
+            "messages": [{
+                "id": str(item.pk), "role": item.role, "text": item.content,
+                "attachments": (item.metadata or {}).get("attachments", []),
+                "tables": (item.metadata or {}).get("tables", []),
+                "details": (item.metadata or {}).get("details", []),
+            } for item in conversation.messages.all()],
+        }
+
+    @staticmethod
+    def append_conversation_event(user, conversation_id, content):
+        try:
+            conversation = AdminAssistantConversation.objects.get(id=conversation_id, user=user)
+        except (AdminAssistantConversation.DoesNotExist, ValueError, ValidationError):
+            return False
+        AdminAssistantMessage.objects.create(
+            conversation=conversation,
+            role=AdminAssistantMessage.ROLE_ASSISTANT,
+            content=content,
+        )
+        conversation.updated_at = timezone.now()
+        conversation.save(update_fields=["updated_at"])
+        return True

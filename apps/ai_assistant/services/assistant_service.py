@@ -456,6 +456,7 @@ class AssistantService:
         user,
         message,
         conversation_id=None,
+        history=None,
     ):
         """
         Process a customer message through the shopper agent.
@@ -474,11 +475,23 @@ class AssistantService:
             conversation_id=conversation_id,
         )
 
+        client_history = history or []
         history = (
             cls._load_history(conversation)
             if conversation is not None
             else []
         )
+        imported_history = []
+        if conversation is None and user is not None and user.is_authenticated:
+            for item in client_history[-12:]:
+                content = item.get("content", "").strip()
+                if not content:
+                    continue
+                if item["role"] == "user":
+                    history.append(HumanMessage(content=content))
+                else:
+                    history.append(AIMessage(content=content))
+                imported_history.append(item)
         history.append(HumanMessage(content=message))
 
         graph = get_shopper_graph()
@@ -567,10 +580,24 @@ class AssistantService:
 
         with transaction.atomic():
             if conversation is None:
+                first_guest_message = next(
+                    (item["content"] for item in imported_history if item["role"] == "user"),
+                    message,
+                )
                 conversation = Conversation.objects.create(
                     user=user,
-                    title=message[:200],
+                    title=first_guest_message[:200],
                 )
+
+                ConversationMessage.objects.bulk_create([
+                    ConversationMessage(
+                        conversation=conversation,
+                        role=(ConversationMessage.ROLE_USER if item["role"] == "user"
+                              else ConversationMessage.ROLE_ASSISTANT),
+                        content=item["content"],
+                    )
+                    for item in imported_history
+                ])
 
             ConversationMessage.objects.create(
                 conversation=conversation,

@@ -98,6 +98,47 @@ class ConversationMessage(models.Model):
         return f"{self.role}: {self.content[:50]}"
 
 
+class AdminAssistantConversation(models.Model):
+    """A private, staff-owned conversation with the admin assistant."""
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    user = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.CASCADE,
+        related_name="admin_assistant_conversations",
+    )
+    title = models.CharField(max_length=200, default="New conversation")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "admin_assistant_conversations"
+        ordering = ["-updated_at"]
+        indexes = [models.Index(fields=["user", "-updated_at"])]
+
+
+class AdminAssistantMessage(models.Model):
+    ROLE_USER = "user"
+    ROLE_ASSISTANT = "assistant"
+    ROLE_CHOICES = [(ROLE_USER, "User"), (ROLE_ASSISTANT, "Assistant")]
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    conversation = models.ForeignKey(
+        AdminAssistantConversation,
+        on_delete=models.CASCADE,
+        related_name="messages",
+    )
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES)
+    content = models.TextField()
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "admin_assistant_messages"
+        ordering = ["created_at"]
+        indexes = [models.Index(fields=["conversation", "created_at"])]
+
+
 class AssistantOrderDraft(models.Model):
     """A short-lived, customer-owned checkout prepared by the shopper agent."""
 
