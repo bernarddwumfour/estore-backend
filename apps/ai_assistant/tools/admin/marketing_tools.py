@@ -2,6 +2,7 @@
 
 import json
 import re
+from datetime import datetime
 from typing import Literal
 
 from django.contrib.auth import get_user_model
@@ -175,5 +176,114 @@ def prepare_admin_marketing_action(entity: str, action: str, ids: list[str],
         return _reply(config)
     pending, errors = AdminMarketingActionService.prepare(
         admin, entity=entity, action=action, ids=ids, review_type=review_type,
+    )
+    return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
+
+
+class PromotionItemInput(BaseModel):
+    variant_id: str
+    quantity: int = Field(default=1, ge=1)
+    is_free: bool = False
+
+
+class CreatePromotionInput(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    bundle_price: float = Field(ge=0)
+    starts_at: datetime
+    ends_at: datetime | None = None
+    items: list[PromotionItemInput] = Field(min_length=1, max_length=20)
+    meta_title: str = ""
+    meta_description: str = ""
+
+
+@tool(args_schema=CreatePromotionInput)
+def prepare_admin_promotion_create(name: str, bundle_price: float, starts_at: datetime,
+                                   items: list[dict], description: str = "",
+                                   ends_at: datetime | None = None, meta_title: str = "",
+                                   meta_description: str = "",
+                                   config: RunnableConfig = None) -> str:
+    """Prepare a bundle promotion from existing variant IDs; it is created only after confirmation."""
+    admin = _admin(config or {})
+    if not admin:
+        return _reply(config)
+    pending, errors = AdminMarketingActionService.prepare(
+        admin, entity="promotion", action="create", data={
+            "name": name, "bundle_price": bundle_price, "starts_at": starts_at,
+            "ends_at": ends_at, "items": items, "description": description,
+            "meta_title": meta_title, "meta_description": meta_description,
+        },
+    )
+    return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
+
+
+class CreateDiscountCodeInput(BaseModel):
+    code: str = Field(min_length=1, max_length=50)
+    name: str = Field(min_length=1, max_length=120)
+    discount_type: Literal["percentage", "fixed"]
+    value: float = Field(gt=0)
+    description: str = ""
+    min_subtotal: float = Field(default=0, ge=0)
+    max_discount_amount: float | None = Field(default=None, ge=0)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    is_active: bool = True
+
+
+@tool(args_schema=CreateDiscountCodeInput)
+def prepare_admin_discount_code_create(code: str, name: str, discount_type: str,
+                                       value: float, description: str = "",
+                                       min_subtotal: float = 0,
+                                       max_discount_amount: float | None = None,
+                                       starts_at: datetime | None = None,
+                                       ends_at: datetime | None = None,
+                                       is_active: bool = True,
+                                       config: RunnableConfig = None) -> str:
+    """Prepare a checkout discount code; the code is created only after confirmation."""
+    admin = _admin(config or {})
+    if not admin:
+        return _reply(config)
+    pending, errors = AdminMarketingActionService.prepare(
+        admin, entity="discount_code", action="create", data={
+            "code": code, "name": name, "discount_type": discount_type, "value": value,
+            "description": description, "min_subtotal": min_subtotal,
+            "max_discount_amount": max_discount_amount, "starts_at": starts_at,
+            "ends_at": ends_at, "is_active": is_active,
+        },
+    )
+    return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
+
+
+class CreateBlogPostInput(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    content: str = Field(min_length=1, max_length=30000, description="Plain text article body; line breaks become paragraphs, do not include HTML")
+    excerpt: str = Field(default="", max_length=300)
+    category_id: str | None = None
+    cover_image_url: str = Field(default="", max_length=500)
+    author_name: str = Field(default="Store Team", max_length=120)
+    status: Literal["draft", "published", "archived"] = "draft"
+    is_featured: bool = False
+    meta_title: str = Field(default="", max_length=200)
+    meta_description: str = Field(default="", max_length=500)
+
+
+@tool(args_schema=CreateBlogPostInput)
+def prepare_admin_blog_post_create(title: str, content: str, excerpt: str = "",
+                                   category_id: str | None = None,
+                                   cover_image_url: str = "", author_name: str = "Store Team",
+                                   status: str = "draft", is_featured: bool = False,
+                                   meta_title: str = "", meta_description: str = "",
+                                   config: RunnableConfig = None) -> str:
+    """Prepare a blog post; it is published or saved as a draft only after confirmation."""
+    admin = _admin(config or {})
+    if not admin:
+        return _reply(config)
+    pending, errors = AdminMarketingActionService.prepare(
+        admin, entity="blog_post", action="create", data={
+            "title": title, "content": content, "excerpt": excerpt,
+            "category_id": category_id, "cover_image_url": cover_image_url,
+            "author_name": author_name, "status": status, "is_featured": is_featured,
+            "meta_title": meta_title, "meta_description": meta_description,
+        },
     )
     return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)

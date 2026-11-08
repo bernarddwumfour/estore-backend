@@ -15,7 +15,8 @@ from .user_tools import (
 from .marketing_tools import (
     search_admin_promotions, search_admin_discount_codes,
     search_admin_blog_posts, search_admin_reviews,
-    prepare_admin_marketing_action,
+    prepare_admin_marketing_action, prepare_admin_promotion_create,
+    prepare_admin_discount_code_create, prepare_admin_blog_post_create,
 )
 
 ADMIN_TOOLS = [
@@ -29,5 +30,6 @@ ADMIN_TOOLS = [
     prepare_admin_user_update,
     search_admin_promotions, search_admin_discount_codes,
     search_admin_blog_posts, search_admin_reviews,
-    prepare_admin_marketing_action,
+    prepare_admin_marketing_action, prepare_admin_promotion_create,
+    prepare_admin_discount_code_create, prepare_admin_blog_post_create,
 ]
