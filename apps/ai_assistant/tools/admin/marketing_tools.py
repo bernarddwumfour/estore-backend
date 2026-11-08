@@ -85,7 +85,7 @@ class PromotionDetailsInput(BaseModel):
 
 @tool(args_schema=PromotionDetailsInput)
 def get_admin_promotion_details(identifier: str, config: RunnableConfig = None) -> str:
-    """Get the complete details and images for one promotion by readable ID, exact name, or slug."""
+    """Get one promotion by the exact supplied PRM ID, exact name, or slug; never infer or construct an ID."""
     if not _admin(config or {}):
         return _reply(config)
     matches = list(Promotion.objects.filter(promotion_code__iexact=identifier).prefetch_related(
@@ -204,7 +204,7 @@ class BlogPostDetailsInput(BaseModel):
 
 @tool(args_schema=BlogPostDetailsInput)
 def get_admin_blog_post_details(identifier: str, config: RunnableConfig = None) -> str:
-    """Get the full article, cover image, publishing state, and metadata for one blog post."""
+    """Get one full blog post by the exact supplied BLG ID, title, or slug; never infer or construct an ID."""
     if not _admin(config or {}):
         return _reply(config)
     matches = list(BlogPost.objects.filter(post_code__iexact=identifier).select_related(
