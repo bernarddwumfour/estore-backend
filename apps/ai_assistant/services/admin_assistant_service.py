@@ -103,7 +103,10 @@ class AdminAssistantService:
         messages.append(HumanMessage(content=content if attached else message.strip()))
         result = get_admin_graph().invoke(
             {"messages": messages},
-            config={"configurable": {"authenticated_user_id": str(user.pk)},
+            config={"configurable": {
+                "authenticated_user_id": str(user.pk),
+                "attached_media_ids": [str(item.pk) for item in attached],
+            },
                     "recursion_limit": 12},
         )
         answer = AssistantService._extract_text(result["messages"][-1])

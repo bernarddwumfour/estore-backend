@@ -35,7 +35,8 @@ ALLOWED_ACTIONS = {
 
 class AdminMarketingActionService:
     @staticmethod
-    def prepare(user, *, entity, action, ids=None, data=None, review_type=None, media_ids=None):
+    def prepare(user, *, entity, action, ids=None, data=None, review_type=None,
+                media_ids=None, allowed_media_ids=None):
         if not user.is_active or user.role not in {User.ROLE_ADMIN, User.ROLE_STAFF}:
             return None, {"permission": "Admin access required"}
         if entity not in ALLOWED_ACTIONS or action not in ALLOWED_ACTIONS.get(entity, set()):
@@ -62,6 +63,9 @@ class AdminMarketingActionService:
             selected_media_ids = list(media_ids)
             if entity == "blog_post" and cover_media_id:
                 selected_media_ids.append(cover_media_id)
+            allowed_media_ids = set(allowed_media_ids or [])
+            if any(value not in allowed_media_ids for value in selected_media_ids):
+                return None, {"media_ids": "Use only images attached to this chat message"}
             if len(selected_media_ids) != len(set(selected_media_ids)):
                 return None, {"media_ids": "Choose distinct images"}
             media = {}

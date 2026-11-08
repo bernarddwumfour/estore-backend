@@ -208,12 +208,14 @@ def prepare_admin_promotion_create(name: str, bundle_price: float, starts_at: da
     admin = _admin(config or {})
     if not admin:
         return _reply(config)
+    configurable = (config or {}).get("configurable") or {}
     pending, errors = AdminMarketingActionService.prepare(
         admin, entity="promotion", action="create", data={
             "name": name, "bundle_price": bundle_price, "starts_at": starts_at,
             "ends_at": ends_at, "items": items, "description": description,
             "meta_title": meta_title, "meta_description": meta_description,
         }, media_ids=image_ids or [],
+        allowed_media_ids=configurable.get("attached_media_ids", []),
     )
     return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
 
@@ -281,6 +283,7 @@ def prepare_admin_blog_post_create(title: str, content: str, excerpt: str = "",
     admin = _admin(config or {})
     if not admin:
         return _reply(config)
+    configurable = (config or {}).get("configurable") or {}
     pending, errors = AdminMarketingActionService.prepare(
         admin, entity="blog_post", action="create", data={
             "title": title, "content": content, "excerpt": excerpt,
@@ -288,6 +291,6 @@ def prepare_admin_blog_post_create(title: str, content: str, excerpt: str = "",
             "cover_media_id": cover_media_id,
             "author_name": author_name, "status": status, "is_featured": is_featured,
             "meta_title": meta_title, "meta_description": meta_description,
-        },
+        }, allowed_media_ids=configurable.get("attached_media_ids", []),
     )
     return json.dumps({"success": errors is None, "pending_action": pending, "errors": errors}, default=str)
