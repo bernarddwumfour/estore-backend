@@ -87,6 +87,19 @@ class ProductSelectorTests(TestCase):
 
 
 class VariantSelectorTests(TestCase):
+    def test_random_featured_variants_filter_before_pagination(self):
+        featured = make_product(status=Product.STATUS_PUBLISHED, is_featured=True)
+        eligible = {make_variant(product=featured).id for _ in range(3)}
+        make_variant(product=make_product(status=Product.STATUS_PUBLISHED, is_featured=False))
+
+        variants, total, _ = get_all_variants(
+            featured=True, sort_by="random", limit=2, is_admin=False
+        )
+
+        self.assertEqual(total, 3)
+        self.assertEqual(len(variants), 2)
+        self.assertTrue({variant.id for variant in variants}.issubset(eligible))
+
     def test_public_variant_listing_hides_inactive_and_hidden_categories(self):
         visible_category = make_category(is_active=True, is_hidden=False)
         hidden_category = make_category(is_active=True, is_hidden=True)

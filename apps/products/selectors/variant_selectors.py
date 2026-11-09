@@ -104,7 +104,7 @@ def get_all_variants(
         "product_title_desc": "-product__title",
     }
 
-    sort_field = sort_mapping.get(sort_by, "-created_at")
+    sort_field = "?" if sort_by == "random" else sort_mapping.get(sort_by, "-created_at")
     if sort_order == "asc" and sort_by not in [
         "price_asc",
         "price_desc",
