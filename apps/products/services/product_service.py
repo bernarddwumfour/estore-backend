@@ -24,7 +24,6 @@ from apps.products.selectors import (
     get_category_by_id,
     get_category_by_slug,
     get_products_filtered,
-    get_related_products,
     get_all_categories,
     get_subcategories,
     get_reviews_by_product,
@@ -281,8 +280,33 @@ class ProductService:
             return None
 
         product_data = serialize_product(product, is_admin=is_admin)
-        related = get_related_products(product, include_drafts=is_admin)
-        product_data["related_products"] = serialize_product_list(related, is_admin=is_admin)
+        related = ProductVariant.objects.filter(
+            product__category_id=product.category_id,
+            is_active=True,
+        ).exclude(product_id=product.id)
+        if not product.category_id:
+            related = related.none()
+        if not is_admin:
+            related = related.filter(product__status=Product.STATUS_PUBLISHED)
+        related = related.select_related("product", "product__category").prefetch_related(
+            "images", "product__variants"
+        ).order_by("?")[:8]
+        cards = []
+        for variant in related:
+            card = serialize_product(variant.product, is_admin=is_admin)
+            variant_data = serialize_variant(variant, is_admin=is_admin)
+            attributes = " · ".join(str(v) for v in variant.attributes.values() if v)
+            card.update({
+                "id": f"{variant.product_id}:{variant.id}",
+                "title": f"{variant.product.title} — {attributes}" if attributes else variant.product.title,
+                "variant_slug": variant.slug,
+                "default_variant": variant_data,
+                "variants": [variant_data],
+                "min_price": float(variant.price),
+                "max_price": float(variant.price),
+            })
+            cards.append(card)
+        product_data["related_products"] = cards
         
         duration_ms = (time.time() - start_time) * 1000
         log_action(
