@@ -18,6 +18,7 @@ from apps.ai_assistant.services.admin_assistant_service import AdminAssistantSer
 from apps.ai_assistant.services.admin_product_action_service import AdminProductActionService
 from apps.ai_assistant.services.admin_user_action_service import AdminUserActionService
 from apps.ai_assistant.services.admin_marketing_action_service import AdminMarketingActionService
+from apps.ai_assistant.services.admin_social_post_action_service import AdminSocialPostActionService
 
 from apps.common.logging import (
     log_action,
@@ -49,6 +50,22 @@ def confirm_admin_marketing_action(request, action_id):
     except Exception:
         logger.exception("Admin marketing action failed for user %s", request.user.pk)
         return APIResponse.server_error("Marketing action failed")
+
+
+@csrf_exempt
+@require_http_methods(["POST"])
+@jwt_required
+@role_required("admin", "staff")
+@ratelimit(key="user", rate="30/h", method="POST", block=True)
+def confirm_admin_social_post_action(request, action_id):
+    try:
+        result, errors = AdminSocialPostActionService.confirm(request.user, action_id)
+        if errors:
+            return APIResponse.bad_request("Social post action could not be confirmed", errors)
+        return APIResponse.success(data={"result": result}, message="Social post action completed")
+    except Exception:
+        logger.exception("Admin social post action failed for user %s", request.user.pk)
+        return APIResponse.server_error("Social post action failed")
 
 
 @csrf_exempt

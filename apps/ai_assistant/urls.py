@@ -20,6 +20,8 @@ urlpatterns = [
          name="prepare-admin-marketing-action"),
     path("admin/marketing/actions/<uuid:action_id>/confirm/", views.confirm_admin_marketing_action,
          name="confirm-admin-marketing-action"),
+    path("admin/social/posts/actions/<uuid:action_id>/confirm/", views.confirm_admin_social_post_action,
+         name="confirm-admin-social-post-action"),
     path("admin/actions/<uuid:action_id>/confirm/", views.confirm_admin_product_action,
          name="confirm-admin-product-action"),
     path("admin/users/actions/<uuid:action_id>/confirm/", views.confirm_admin_user_action,

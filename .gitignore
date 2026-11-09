@@ -20,6 +20,9 @@ venv/
 *.swp
 *.swo
 
+# Local planning notes (kept out of version control)
+/LOCAL_HOLD.md
+
 # OS
 .DS_Store
 Thumbs.db

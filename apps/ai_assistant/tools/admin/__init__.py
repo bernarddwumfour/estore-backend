@@ -19,6 +19,12 @@ from .marketing_tools import (
     prepare_admin_marketing_action, prepare_admin_promotion_create,
     prepare_admin_discount_code_create, prepare_admin_blog_post_create,
 )
+from .social_post_tools import (
+    search_admin_social_posts, get_admin_social_post_details,
+    list_admin_social_accounts, get_admin_social_post_analytics,
+    prepare_admin_social_post, prepare_admin_social_post_approval,
+    prepare_admin_social_post_rejection,
+)
 
 ADMIN_TOOLS = [
     search_admin_products, get_admin_product, list_admin_variants,
@@ -34,4 +40,8 @@ ADMIN_TOOLS = [
     get_admin_blog_post_details, search_admin_reviews,
     prepare_admin_marketing_action, prepare_admin_promotion_create,
     prepare_admin_discount_code_create, prepare_admin_blog_post_create,
+    search_admin_social_posts, get_admin_social_post_details,
+    list_admin_social_accounts, get_admin_social_post_analytics,
+    prepare_admin_social_post, prepare_admin_social_post_approval,
+    prepare_admin_social_post_rejection,
 ]

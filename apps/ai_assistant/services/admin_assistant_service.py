@@ -56,6 +56,11 @@ LIST_TOOL_TABLES = {
         ("rating", "Rating"), ("overall_rating", "Order rating"),
         ("comment_preview", "Review"), ("is_approved", "Approved"),
     ]),
+    "search_admin_social_posts": ("Social posts", "posts", [
+        ("caption", "Caption"), ("status", "Status"), ("source", "Source"),
+        ("platforms", "Platforms"), ("media_count", "Media"),
+        ("scheduled_for", "Scheduled"), ("created_at", "Created"),
+    ]),
 }
 
 
