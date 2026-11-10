@@ -5,7 +5,7 @@ Industry-ready base configuration (no DRF).
 
 import dj_database_url
 from pathlib import Path
-from decouple import config, Csv
+from decouple import config, Config, RepositoryEnv, Csv
 from importlib.util import find_spec
 import os
 from urllib.parse import urlparse
@@ -16,9 +16,16 @@ except ModuleNotFoundError:  # pragma: no cover - local fallback for lean envs
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+selected_env_file = os.environ.get("ESTORE_ENV_FILE")
+if selected_env_file:
+    selected_env_path = BASE_DIR / selected_env_file
+    if not selected_env_path.is_file():
+        raise RuntimeError(f"Store environment file not found: {selected_env_path}")
+    config = Config(RepositoryEnv(str(selected_env_path)))
+
 if environ is not None:
     env = environ.Env()
-    environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
+    environ.Env.read_env(str(selected_env_path) if selected_env_file else os.path.join(BASE_DIR, '.env'), overwrite=bool(selected_env_file))
 
 SECRET_KEY = config("SECRET_KEY")  # required; no insecure fallback
 
@@ -371,6 +378,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
     "https://estore-frontend-boqb.vercel.app",
     "http://localhost:3000",
+    "https://oakandloom-nu.vercel.app"
     
 ]
 CORS_ALLOW_CREDENTIALS = True

@@ -11,6 +11,8 @@ staticfiles/
 # Environment
 .env
 .env.local
+/.env.iplug
+/.env.oakandloom
 venv/
 *.sqlite3
 
