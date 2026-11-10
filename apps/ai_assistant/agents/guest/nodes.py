@@ -1,3 +1,4 @@
+from apps.ai_assistant.features import available_tools
 import logging
 import time
 
@@ -11,9 +12,11 @@ logger = logging.getLogger(__name__)
 
 
 def create_guest_assistant_node():
-    model_with_tools = get_shopper_model().bind_tools(GUEST_TOOLS)
+    model = get_shopper_model()
 
     def assistant_node(state):
+        tools = available_tools(GUEST_TOOLS, "guest")
+        model_with_tools = model.bind_tools(tools) if tools else model
         started_at = time.perf_counter()
         response = model_with_tools.invoke([
             SystemMessage(content=GUEST_SYSTEM_PROMPT),

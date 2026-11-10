@@ -1,3 +1,4 @@
+from apps.ai_assistant.features import require_agent
 
 import logging
 import time
@@ -41,6 +42,7 @@ logger = logging.getLogger(__name__)
 @jwt_required
 @role_required("admin", "staff")
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def confirm_admin_marketing_action(request, action_id):
     try:
         result, errors = AdminMarketingActionService.confirm(request.user, action_id)
@@ -57,6 +59,7 @@ def confirm_admin_marketing_action(request, action_id):
 @jwt_required
 @role_required("admin", "staff")
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def confirm_admin_social_post_action(request, action_id):
     try:
         result, errors = AdminSocialPostActionService.confirm(request.user, action_id)
@@ -74,6 +77,7 @@ def confirm_admin_social_post_action(request, action_id):
 @role_required("admin", "staff")
 @json_request_required
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def prepare_admin_marketing_action(request):
     data = request.json_data
     try:
@@ -98,6 +102,7 @@ def prepare_admin_marketing_action(request):
 @role_required("admin", "staff")
 @json_request_required
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def prepare_admin_product_bulk_action(request):
     """Prepare a selected-product action for a separate confirmation request."""
     ids = request.json_data.get("ids")
@@ -123,6 +128,7 @@ def prepare_admin_product_bulk_action(request):
 @jwt_required
 @role_required("admin", "staff")
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def confirm_admin_product_action(request, action_id):
     """Execute one pending product action after an explicit staff request."""
     try:
@@ -140,6 +146,7 @@ def confirm_admin_product_action(request, action_id):
 @jwt_required
 @role_required("admin")
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def confirm_admin_user_action(request, action_id):
     """Confirm a pending user management action as an administrator."""
     try:
@@ -158,6 +165,7 @@ def confirm_admin_user_action(request, action_id):
 @role_required("admin", "staff")
 @json_request_required
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("admin")
 def admin_assistant_chat(request):
     """Answer a staff catalog question using only read-only admin tools."""
     message = request.json_data.get("message")
@@ -194,6 +202,7 @@ def admin_assistant_chat(request):
 @jwt_required
 @role_required("admin", "staff")
 @ratelimit(key="user", rate="60/h", method="GET", block=True)
+@require_agent("admin")
 def admin_assistant_conversations(request):
     return APIResponse.success(data={"conversations": AdminAssistantService.list_conversations(request.user)})
 
@@ -203,6 +212,7 @@ def admin_assistant_conversations(request):
 @jwt_required
 @role_required("admin", "staff")
 @ratelimit(key="user", rate="60/h", method="GET", block=True)
+@require_agent("admin")
 def admin_assistant_conversation_detail(request, conversation_id):
     conversation = AdminAssistantService.get_conversation(request.user, conversation_id)
     if conversation is None:
@@ -216,6 +226,7 @@ def admin_assistant_conversation_detail(request, conversation_id):
 @role_required("admin", "staff")
 @json_request_required
 @ratelimit(key="user", rate="60/h", method="POST", block=True)
+@require_agent("admin")
 def append_admin_assistant_conversation_event(request, conversation_id):
     content = request.json_data.get("content")
     if not isinstance(content, str) or not content.strip() or len(content) > 4000:
@@ -230,6 +241,7 @@ def append_admin_assistant_conversation_event(request, conversation_id):
 @jwt_required
 @json_request_required
 @ratelimit(key="user", rate="30/h", method="POST", block=True)
+@require_agent("shopper")
 def assistant_chat(request):
     """
     Send a message to the AI shopping assistant.
@@ -325,6 +337,7 @@ def assistant_chat(request):
 @jwt_optional
 @json_request_required
 @ratelimit(key="ip", rate="20/h", method="POST", block=True)
+@require_agent("guest")
 def guest_assistant_chat(request):
     """Public, read-only shopping chat. Guest history is supplied by the client and not persisted."""
     data = request.json_data
@@ -352,6 +365,7 @@ def guest_assistant_chat(request):
 @jwt_required
 @json_request_required
 @ratelimit(key="user", rate="10/h", method="POST", block=True)
+@require_agent("shopper")
 def confirm_assistant_order(request, draft_id):
     """Create an order only after the customer confirms a prepared draft."""
     data = request.json_data

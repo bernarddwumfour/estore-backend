@@ -258,12 +258,9 @@ def product_search(request):
         
         is_admin = _is_admin(request)
         
-        products, total, pagination_meta = ProductService.get_public_products(
-            page=page,
-            limit=limit,
-            search=query,
-            is_admin=is_admin,
-        )
+        from apps.products.services.discovery_service import search_catalog
+
+        products, total, pagination_meta = search_catalog(query, page=page, limit=limit)
         
         _log_product_request(
             request, action, start_time, 200,

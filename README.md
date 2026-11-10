@@ -37,3 +37,21 @@ The Render worker is configured with Beat; run only one Beat scheduler per
 store even if additional workers are deployed. Without Redis, refreshes run
 inline after catalog changes; hourly reconciliation requires Redis and a
 running Celery worker with Beat.
+
+## AI controls and product discovery
+
+Dashboard → Settings → General contains store-specific switches for all AI,
+storefront semantic product search, chat product discovery, and shopper/guest/admin agents.
+All switches default to enabled. Changes are enforced by the API and at agent
+model/tool execution, including cached graphs; no server restart is needed for
+setting changes. Disabled agents cannot confirm previously prepared actions.
+
+Public `/api/products/search?q=...` first uses keyword search. If no keyword
+matches exist, it searches product embeddings and returns verified published
+catalog products in relevance order. Disabling semantic search or all AI keeps
+keyword search available. Provider failures fall back to the keyword response.
+The semantic candidate pool is capped at 200 products. Each store needs its own
+populated embedding index and the common app migrations applied.
+
+The storefront semantic-search switch does not affect shopper or guest semantic
+search. Use their agent switches to disable those assistants entirely.

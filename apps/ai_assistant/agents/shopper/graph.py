@@ -1,3 +1,4 @@
+from apps.ai_assistant.features import tool_node
 from langgraph.graph import StateGraph, START, END
 from langgraph.prebuilt import ToolNode, tools_condition
 
@@ -23,7 +24,7 @@ def build_shopper_graph():
 
     graph.add_node(
         "tools",
-        ToolNode(SHOPPER_TOOLS),
+        tool_node(SHOPPER_TOOLS, "shopper"),
     )
 
     # Entry point

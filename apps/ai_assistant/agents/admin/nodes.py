@@ -1,3 +1,4 @@
+from apps.ai_assistant.features import available_tools
 """Model and assistant node for the admin agent."""
 
 import logging
@@ -21,9 +22,11 @@ def get_admin_model():
 
 
 def create_assistant_node():
-    model_with_tools = get_admin_model().bind_tools(ADMIN_TOOLS)
+    model = get_admin_model()
 
     def assistant_node(state):
+        tools = available_tools(ADMIN_TOOLS, "admin")
+        model_with_tools = model.bind_tools(tools) if tools else model
         started_at = time.perf_counter()
         response = model_with_tools.invoke([
             SystemMessage(content=ADMIN_SYSTEM_PROMPT),

@@ -65,7 +65,17 @@ def validate_general_config_update(data: Dict) -> Tuple[Optional[Dict], Optional
     errors: Dict = {}
     cleaned: Dict = {}
 
+    if not isinstance(data, dict):
+        return None, {"general": "Configuration must be an object"}
+
     bool_fields = (
+        "ai_enabled",
+        "ai_semantic_search_enabled",
+        "ai_discovery_enabled",
+        "ai_shopper_enabled",
+        "ai_guest_enabled",
+        "ai_admin_enabled",
+
         "paystack_enabled", "pod_enabled", "guest_checkout_enabled", "hide_out_of_stock",
         "tax_inclusive",
     )
@@ -171,6 +181,12 @@ def validate_general_config_update(data: Dict) -> Tuple[Optional[Dict], Optional
 
 def serialize_general_config(config: GeneralConfig) -> Dict:
     return {
+        "ai_enabled": config.ai_enabled,
+        "ai_semantic_search_enabled": config.ai_semantic_search_enabled,
+        "ai_discovery_enabled": config.ai_discovery_enabled,
+        "ai_shopper_enabled": config.ai_shopper_enabled,
+        "ai_guest_enabled": config.ai_guest_enabled,
+        "ai_admin_enabled": config.ai_admin_enabled,
         "paystack_enabled": config.paystack_enabled,
         "pod_enabled": config.pod_enabled,
         "default_payment_method": config.default_payment_method,

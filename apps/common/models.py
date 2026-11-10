@@ -88,6 +88,14 @@ class GeneralConfig(models.Model):
 
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
 
+    # AI runtime controls
+    ai_enabled = models.BooleanField(default=True)
+    ai_semantic_search_enabled = models.BooleanField(default=True)
+    ai_discovery_enabled = models.BooleanField(default=True)
+    ai_shopper_enabled = models.BooleanField(default=True)
+    ai_guest_enabled = models.BooleanField(default=True)
+    ai_admin_enabled = models.BooleanField(default=True)
+
     # Payments
     paystack_enabled = models.BooleanField(_("Paystack enabled"), default=True)
     pod_enabled = models.BooleanField(_("Pay on Delivery enabled"), default=True)

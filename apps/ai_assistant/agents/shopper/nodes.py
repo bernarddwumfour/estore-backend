@@ -1,3 +1,4 @@
+from apps.ai_assistant.features import available_tools
 import os
 
 from langchain_openai import ChatOpenAI
@@ -40,9 +41,10 @@ def create_assistant_node():
     """
 
     model = get_shopper_model()
-    model_with_tools = model.bind_tools(SHOPPER_TOOLS)
 
     def assistant_node(state):
+        tools = available_tools(SHOPPER_TOOLS, "shopper")
+        model_with_tools = model.bind_tools(tools) if tools else model
         messages = [
             SystemMessage(content=SHOPPER_SYSTEM_PROMPT),
             *state["messages"],
