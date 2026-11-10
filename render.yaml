@@ -29,7 +29,7 @@ services:
     plan: starter
     region: oregon
     buildCommand: "./build.sh"
-    startCommand: "celery -A estore worker -l info --concurrency 2"
+    startCommand: "celery -A estore worker -B -l info --concurrency 2"
     envVars:
       - key: DATABASE_URL
         fromDatabase:
@@ -47,6 +47,8 @@ services:
       - key: RESEND_API_KEY
         sync: false
       - key: SENDER_EMAIL
+        sync: false
+      - key: OPENAI_API_KEY
         sync: false
 
   - type: redis

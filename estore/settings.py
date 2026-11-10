@@ -150,6 +150,12 @@ else:
     CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_BEAT_SCHEDULE = {
+    "reconcile-product-embeddings": {
+        "task": "apps.ai_assistant.tasks.reconcile_product_embeddings",
+        "schedule": 3600.0,
+    },
+}
 
 
 RATELIMIT_USE_CACHE = 'default'
