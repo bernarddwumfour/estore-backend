@@ -260,7 +260,7 @@ def product_search(request):
         
         from apps.products.services.discovery_service import search_catalog
 
-        products, total, pagination_meta = search_catalog(query, page=page, limit=limit)
+        products, total, pagination_meta, result_type = search_catalog(query, page=page, limit=limit)
         
         _log_product_request(
             request, action, start_time, 200,
@@ -279,7 +279,8 @@ def product_search(request):
                 "products": products,
                 "total": total,
                 "pagination": pagination_meta,
-                "query": query
+                "query": query,
+                "result_type": result_type,
             },
             message=f"Search results for '{query}'"
         )
