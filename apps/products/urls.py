@@ -143,7 +143,7 @@ urlpatterns = [
     ),
     
     path(
-        "/<slug:slug>/reviews/create",
+        "/<str:slug>/reviews/create",
         product_review_create,
         name="product-review-create",
     ),
@@ -187,7 +187,7 @@ urlpatterns = [
     # ==================== AUTHENTICATED USER ENDPOINTS ====================
     path("/wishlist", wishlist_list, name="wishlist-list"),
     path("/wishlist/<uuid:variant_id>", wishlist_remove, name="wishlist-remove"),
-    path("/<slug:slug>", product_detail, name="product-detail"),
+    path("/<str:slug>", product_detail, name="product-detail"),
     
     # ==================== ADMIN REVIEW ENDPOINTS ====================
    path(
@@ -217,7 +217,7 @@ urlpatterns = [
     ),
     
     path(
-        "/<slug:slug>/reviews",
+        "/<str:slug>/reviews",
         product_reviews_list,
         name="product-reviews-list",
     ),

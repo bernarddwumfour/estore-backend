@@ -92,6 +92,9 @@ OPENAI_API_KEY = env("OPENAI_API_KEY", default="")
 # Public storefront base URL used in social post captions
 STOREFRONT_BASE_URL = config("STOREFRONT_BASE_URL", default="http://localhost:3000")
 
+# Shared secret for storefront cache invalidation callbacks.
+REVALIDATE_SECRET = config("REVALIDATE_SECRET", default="")
+
 # Default shipping origin (warehouse address)
 DEFAULT_SHIPPING_ORIGIN = {
     "country": "GH",

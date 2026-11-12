@@ -16,6 +16,15 @@ from apps.common.utils import coerce_bool
 from ..models import Product
 from apps.common.utils import sanitize_search_query
 from apps.common.logging import log_action, LogSeverity, get_user_info
+from apps.common.revalidation import capture_revalidation, revalidation_status, storefront_revalidation_url
+from django.conf import settings
+
+
+def _category_store_status(results):
+    return revalidation_status(
+        results,
+        bool(storefront_revalidation_url("categories") and settings.REVALIDATE_SECRET),
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -500,17 +509,18 @@ def admin_category_create(request):
         is_active = coerce_bool(data.get("is_active"), default=True)
         is_hidden = coerce_bool(data.get("is_hidden"), default=False)
         
-        category, errors = CategoryService.create_category(
-            name=name,
-            description=data.get("description", ""),
-            parent_id=data.get("parent_id"),
-            is_active=is_active,
-            is_hidden=is_hidden,
-            meta_title=data.get("meta_title", ""),
-            meta_description=data.get("meta_description", ""),
-            image_file=image_file,
-            user=request.user
-        )
+        with capture_revalidation() as store_results:
+            category, errors = CategoryService.create_category(
+                name=name,
+                description=data.get("description", ""),
+                parent_id=data.get("parent_id"),
+                is_active=is_active,
+                is_hidden=is_hidden,
+                meta_title=data.get("meta_title", ""),
+                meta_description=data.get("meta_description", ""),
+                image_file=image_file,
+                user=request.user
+            )
         
         if errors:
             _log_category_request(
@@ -537,7 +547,8 @@ def admin_category_create(request):
                 "category_id": str(category.id),
                 "slug": category.slug,
                 "name": category.name,
-                "is_hidden": category.is_hidden
+                "is_hidden": category.is_hidden,
+                "storefront_revalidation": _category_store_status(store_results),
             },
             message="Category created successfully"
         )
@@ -622,13 +633,14 @@ def admin_category_update(request, category_id):
         # Handle image removal flag
         remove_image = data.get('remove_image', 'false').lower() == 'true' if isinstance(data.get('remove_image'), str) else bool(data.get('remove_image', False))
         
-        category, errors = CategoryService.update_category(
-            category_id=category_id,
-            data=update_data,
-            image_file=image_file,
-            remove_image=remove_image,
-            user=request.user
-        )
+        with capture_revalidation() as store_results:
+            category, errors = CategoryService.update_category(
+                category_id=category_id,
+                data=update_data,
+                image_file=image_file,
+                remove_image=remove_image,
+                user=request.user
+            )
         
         if errors:
             _log_category_request(
@@ -656,7 +668,8 @@ def admin_category_update(request, category_id):
                 "category_id": str(category.id),
                 "slug": category.slug,
                 "name": category.name,
-                "is_hidden": category.is_hidden
+                "is_hidden": category.is_hidden,
+                "storefront_revalidation": _category_store_status(store_results),
             },
             message="Category updated successfully"
         )
@@ -732,7 +745,8 @@ def admin_category_delete(request, category_id):
             return APIResponse.bad_request("Cannot delete category with products")
         
         category_name = category.name
-        category.delete()
+        with capture_revalidation() as store_results:
+            category.delete()
         
         _log_category_request(
             request, action, start_time, 200,
@@ -743,7 +757,10 @@ def admin_category_delete(request, category_id):
             }
         )
         
-        return APIResponse.success(message="Category deleted successfully")
+        return APIResponse.success(
+            data={"storefront_revalidation": _category_store_status(store_results)},
+            message="Category deleted successfully",
+        )
     except Exception as e:
         logger.error(f"Admin category delete error: {str(e)}", exc_info=True)
         _log_category_request(request, action, start_time, 500, extra={"category_id": category_id, "error": str(e)})
@@ -788,11 +805,12 @@ def admin_category_bulk_action(request):
             return APIResponse.validation_error(errors)
         
         # Execute bulk action
-        results, error = CategoryService.bulk_action_categories(
-            category_ids=cleaned['category_ids'],
-            action=cleaned['action'],
-            user=request.user
-        )
+        with capture_revalidation() as store_results:
+            results, error = CategoryService.bulk_action_categories(
+                category_ids=cleaned['category_ids'],
+                action=cleaned['action'],
+                user=request.user
+            )
         
         if error:
             _log_category_request(
@@ -803,6 +821,7 @@ def admin_category_bulk_action(request):
         
         # Serialize and return response
         serialized_results = serialize_bulk_action_result(results)
+        serialized_results['storefront_revalidation'] = _category_store_status(store_results)
         
         if serialized_results['failed_count'] == 0:
             message = f"Successfully {cleaned['action']}ed {serialized_results['success_count']} categories"

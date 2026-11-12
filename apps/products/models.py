@@ -445,6 +445,14 @@ class ProductVariant(models.Model):
             )
 
         self.refresh_from_db(fields=["stock"])
+        if (
+            quantity > 0
+            and self.stock == 0
+            and self.product.status == Product.STATUS_PUBLISHED
+        ):
+            from .revalidation import schedule_product_revalidation
+
+            schedule_product_revalidation(using=self._state.db)
 
     def increase_stock(self, quantity):
         """Atomically increase stock by quantity."""
@@ -452,6 +460,14 @@ class ProductVariant(models.Model):
 
         self.__class__.objects.filter(pk=self.pk).update(stock=F("stock") + quantity)
         self.refresh_from_db(fields=["stock"])
+        if (
+            quantity > 0
+            and self.stock == quantity
+            and self.product.status == Product.STATUS_PUBLISHED
+        ):
+            from .revalidation import schedule_product_revalidation
+
+            schedule_product_revalidation(using=self._state.db)
         
     @property
     def gross_profit(self) -> Decimal:
