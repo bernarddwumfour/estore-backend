@@ -250,6 +250,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "apps.common.middleware.RateLimitExceptionMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -382,9 +383,10 @@ CSRF_TRUSTED_ORIGINS = [
 
 CORS_ALLOWED_ORIGINS = [
     "https://9000-firebase-estore-1765889581026.cluster-ikslh4rdsnbqsvu5nw3v4dqjj2.cloudworkstations.dev",
-    "https://estore-frontend-boqb.vercel.app",
-    "http://localhost:3000",
-    "https://oakandloom-nu.vercel.app"
+    config(
+    "FRONTEND_BASE_URL",
+    default="http://localhost:3000",
+)
     
 ]
 CORS_ALLOW_CREDENTIALS = True
