@@ -181,6 +181,10 @@ class ProductService:
         page: int = 1,
         limit: int = 20,
         search: str = None,
+        product_ids: Optional[List[str]] = None,
+        preserve_order: bool = False,
+        search_attributes: bool = False,
+        include_product_title: bool = False,
         min_price: float = None,
         max_price: float = None,
         in_stock: bool = None,
@@ -196,6 +200,9 @@ class ProductService:
             page=page,
             limit=limit,
             search=search,
+            product_ids=product_ids,
+            preserve_product_order=preserve_order,
+            search_attributes=search_attributes,
             min_price=min_price,
             max_price=max_price,
             in_stock=in_stock,
@@ -216,7 +223,7 @@ class ProductService:
                 str(value) for value in variant.attributes.values() if value
             )
 
-            cards.append({
+            card = {
                 "id": f"{product.id}:{variant.id}",
                 "title": (
                     f"{product.title} — {attributes}"
@@ -241,7 +248,10 @@ class ProductService:
                 } if product.category else None),
                 "default_variant": variant_data,
                 "variants": [variant_data],
-            })
+            }
+            if include_product_title:
+                card["product_title"] = product.title
+            cards.append(card)
 
         return cards, total, pagination_meta
     

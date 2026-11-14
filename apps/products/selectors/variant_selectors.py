@@ -5,7 +5,8 @@ No business logic - just queries
 
 from typing import Optional, List, Dict,  Tuple
 from django.core.exceptions import ValidationError
-from django.db.models import Q
+from django.db.models import Case, CharField, IntegerField, Q, When
+from django.db.models.functions import Cast
 from django.core.paginator import Paginator, EmptyPage, PageNotAnInteger
 from apps.products.models import ProductVariant, Product
 
@@ -17,6 +18,9 @@ def get_all_variants(
     limit: int = 20,
     search: str = None,
     product_id: str = None,
+    product_ids: Optional[List[str]] = None,
+    preserve_product_order: bool = False,
+    search_attributes: bool = False,
     is_active: bool = None,
     is_default: bool = None,
     min_price: float = None,
@@ -39,6 +43,8 @@ def get_all_variants(
     # Filter by product
     if product_id:
         queryset = queryset.filter(product_id=product_id)
+    if product_ids is not None:
+        queryset = queryset.filter(product_id__in=product_ids)
 
     if category_slug:
         queryset = queryset.filter(product__category__slug=category_slug)
@@ -71,11 +77,15 @@ def get_all_variants(
 
     # Search by SKU or product title
     if search:
-        queryset = queryset.filter(
+        search_filter = (
             Q(sku__icontains=search)
             | Q(product__title__icontains=search)
             | Q(product__slug__icontains=search)
         )
+        if search_attributes:
+            queryset = queryset.annotate(_attributes_text=Cast("attributes", CharField()))
+            search_filter |= Q(_attributes_text__icontains=search)
+        queryset = queryset.filter(search_filter)
 
     # Apply admin filters (show inactive products only if admin)
     if not is_admin:
@@ -117,7 +127,17 @@ def get_all_variants(
     ]:
         sort_field = sort_field.lstrip("-")
 
-    queryset = queryset.order_by(sort_field)
+    if preserve_product_order and product_ids is not None:
+        product_order = Case(
+            *[
+                When(product_id=product_id, then=index)
+                for index, product_id in enumerate(product_ids)
+            ],
+            output_field=IntegerField(),
+        )
+        queryset = queryset.order_by(product_order, "-is_default", "-created_at")
+    else:
+        queryset = queryset.order_by(sort_field)
 
     # Get total count before pagination
     total = queryset.count()

@@ -42,30 +42,33 @@ class FeatureControlTests(SimpleTestCase):
         self.assertIsNotNone(validate_general_config_update([])[1])
 
     @patch('apps.products.services.discovery_service.search_product_embeddings')
-    @patch('apps.products.services.discovery_service.ProductService.get_public_products')
+    @patch('apps.products.services.discovery_service.ProductService.get_public_variant_products')
     def test_keyword_matches_skip_provider(self, products, semantic):
         products.return_value=([{'id':'a'}],1,{})
         self.assertEqual(search_catalog('sofa'),(*products.return_value, 'matching'))
         semantic.assert_not_called()
 
     @patch('apps.products.services.discovery_service.search_product_embeddings')
-    @patch('apps.products.services.discovery_service.ProductService.get_public_products')
+    @patch('apps.products.services.discovery_service.ProductService.get_public_variant_products')
     def test_semantic_candidates_use_public_selector_and_pagination(self, products, semantic):
         products.side_effect=[([],0,{}),([{'id':'a'}],1,{})]
         semantic.return_value=[{'product_id':'a'}]
         result = search_catalog('a comfy place to sit',page=2,limit=4)
         self.assertEqual(result[1],1)
         self.assertEqual(result[3],'related')
-        products.assert_called_with(product_ids=['a'],preserve_order=True,page=2,limit=4)
+        products.assert_called_with(
+            product_ids=['a'], preserve_order=True, include_product_title=True,
+            page=2, limit=4,
+        )
 
     @patch('apps.products.services.discovery_service.search_product_embeddings',side_effect=RuntimeError('offline'))
-    @patch('apps.products.services.discovery_service.ProductService.get_public_products',return_value=([],0,{}))
+    @patch('apps.products.services.discovery_service.ProductService.get_public_variant_products',return_value=([],0,{}))
     def test_provider_failure_preserves_keyword_response(self, products, semantic):
         with self.assertLogs('apps.products.services.discovery_service',level='ERROR'):
             self.assertEqual(search_catalog('comfy'),([],0,{},'none'))
 
     @patch('apps.products.services.discovery_service.search_product_embeddings')
-    @patch('apps.products.services.discovery_service.ProductService.get_public_products',return_value=([],0,{}))
+    @patch('apps.products.services.discovery_service.ProductService.get_public_variant_products',return_value=([],0,{}))
     def test_disabled_storefront_semantic_search_never_calls_provider(self, products, semantic):
         self.storefront_flag.return_value=False
         self.assertEqual(search_catalog('sofa'),([],0,{},'none'))

@@ -8,7 +8,13 @@ logger = logging.getLogger(__name__)
 
 
 def search_catalog(query: str, page: int = 1, limit: int = 20):
-    result = ProductService.get_public_products(search=query, page=page, limit=limit)
+    result = ProductService.get_public_variant_products(
+        search=query,
+        page=page,
+        limit=limit,
+        search_attributes=True,
+        include_product_title=True,
+    )
     if result[1]:
         return (*result, "matching")
     try:
@@ -16,9 +22,12 @@ def search_catalog(query: str, page: int = 1, limit: int = 20):
             return (*result, "none")
         candidates = search_product_embeddings(query, limit=200)
         if candidates:
-            related = ProductService.get_public_products(
+            related = ProductService.get_public_variant_products(
                 product_ids=[item["product_id"] for item in candidates],
-                preserve_order=True, page=page, limit=limit,
+                preserve_order=True,
+                include_product_title=True,
+                page=page,
+                limit=limit,
             )
             return (*related, "related" if related[1] else "none")
     except Exception:
