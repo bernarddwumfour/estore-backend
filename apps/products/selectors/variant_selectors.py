@@ -80,6 +80,7 @@ def get_all_variants(
         search_filter = (
             Q(sku__icontains=search)
             | Q(product__title__icontains=search)
+            | Q(product__description__icontains=search)
             | Q(product__slug__icontains=search)
         )
         if search_attributes:
