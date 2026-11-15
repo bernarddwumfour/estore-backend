@@ -14,6 +14,7 @@ staticfiles/
 /.env.iplug
 /.env.oakandloom
 /.env.tyrepapa
+/.env.oliveandaura
 venv/
 *.sqlite3
 

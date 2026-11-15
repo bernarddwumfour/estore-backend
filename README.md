@@ -5,21 +5,31 @@
 # estore-backend
 # Local store environments
 
-Store credentials live in ignored `.env.iplug`, `.env.oakandloom`, and
-`.env.tyrepapa` files.
+Store credentials live in ignored `.env.iplug`, `.env.oakandloom`,
+`.env.tyrepapa`, and `.env.oliveandaura` files.
 Run Django management commands through the store selector:
 
 ```sh
 venv/bin/python manage_store.py iplug runserver
 venv/bin/python manage_store.py oak runserver
 venv/bin/python manage_store.py tyrepapa runserver
+venv/bin/python manage_store.py oliveandaura runserver
 ```
 
+The selector chooses ports 8000 (iPlug), 8001 (Oak & Loom), 8002 (TyrePapa),
+and 8003 (Olive & Aura). These pair with frontend ports 3000, 3001, 3002, and
+3003 respectively. Pass an explicit `runserver` address to override a default.
+
+Olive & Aura has its own database profile. Set `DATABASE_URL` in
+`.env.oliveandaura` to the dedicated beauty database before running database or
+server commands. Until then, the store selector blocks those commands to avoid
+falling back to the shared local SQLite database. Once configured, run
+`venv/bin/python manage_store.py oliveandaura migrate` to prepare that database.
+
 The same selector works with other management commands, for example
-`venv/bin/python manage_store.py oak migrate` or `createsuperuser`. Run one
-API on port 8000 at a time, or provide a different port to `runserver` and
-set the matching frontend API URL. Oak & Loom's payment and social credentials
-must be configured separately before enabling those integrations.
+`venv/bin/python manage_store.py oak migrate` or `createsuperuser`. Oak & Loom's
+payment and social credentials must be configured separately before enabling
+those integrations.
 
 ## Product search embeddings
 
