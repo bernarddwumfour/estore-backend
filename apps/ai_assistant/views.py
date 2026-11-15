@@ -38,6 +38,23 @@ logger = logging.getLogger(__name__)
 
 
 @csrf_exempt
+@require_http_methods(["GET", "POST"])
+@jwt_required
+@ratelimit(key="user", rate="30/h", method=("GET", "POST"), block=True)
+@require_agent("shopper")
+def appointment_review(request, action_id):
+    from apps.ai_assistant.services.appointment_action_service import get_review, confirm
+    if request.method == "GET":
+        record = get_review(request.user, str(action_id))
+        if not record: return APIResponse.not_found("Review not found or expired")
+        return APIResponse.success({"action": record["action"], "details": record["preview"]}, "Appointment review")
+    try:
+        return APIResponse.success({"appointment": confirm(request.user, str(action_id))}, "Appointment updated")
+    except ValueError as exc:
+        return APIResponse.validation_error({"appointment": str(exc)})
+
+
+@csrf_exempt
 @require_http_methods(["POST"])
 @jwt_required
 @role_required("admin", "staff")

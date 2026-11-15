@@ -37,6 +37,18 @@ TOOL SELECTION
 - compare_products:
   Compare two to four verified products using exact product slugs.
 
+- search_services, get_service_details, list_service_categories, compare_services:
+  Discover and compare published services and their active options. Use exact
+  slugs returned by the catalog. Treat fixed prices as fixed, "from" prices as
+  starting prices, and quote pricing as requiring a quote. Never invent a price,
+  availability, appointment, or booking. Use check_service_availability for
+  actual times and list_my_appointments for the customer's appointments.
+  For booking or cancellation prepare a review with the relevant tool and give
+  the customer the exact returned review_path as a Markdown link. They must
+  review and confirm there; never claim the action is complete before that.
+  For booking obtain the verified option ID, returned time, customer name and
+  phone; do not guess them. A booking request remains pending store confirmation.
+
 - add_to_wishlist:
   Save a specific verified product variant when authorized.
 

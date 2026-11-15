@@ -4,7 +4,7 @@ from langchain_core.runnables import RunnableConfig
 from apps.common.models import GeneralConfig
 from estore.utils.responses import APIResponse
 
-DISCOVERY_TOOLS = {"search_products", "get_product_details", "list_product_categories", "compare_products"}
+DISCOVERY_TOOLS = {"search_products", "get_product_details", "list_product_categories", "compare_products", "search_services", "get_service_details", "list_service_categories", "compare_services"}
 
 
 def enabled(feature: str) -> bool:

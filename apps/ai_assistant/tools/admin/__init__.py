@@ -25,8 +25,12 @@ from .social_post_tools import (
     prepare_admin_social_post, prepare_admin_social_post_approval,
     prepare_admin_social_post_rejection,
 )
+from .service_tools import search_admin_services, get_admin_service, list_admin_service_categories, search_admin_appointments, get_admin_appointment, get_admin_booking_settings, prepare_admin_service_action
 
 ADMIN_TOOLS = [
+    search_admin_services, get_admin_service, list_admin_service_categories,
+    search_admin_appointments, get_admin_appointment, get_admin_booking_settings,
+    prepare_admin_service_action,
     search_admin_products, get_admin_product, list_admin_variants,
     get_admin_variant, list_admin_categories, get_admin_category, get_inventory_health,
     create_admin_product, update_admin_product,

@@ -421,6 +421,19 @@ class AssistantService:
         return None
 
     @staticmethod
+    def _extract_appointment_review(messages):
+        for message in reversed(messages):
+            if not isinstance(message, ToolMessage) or message.name not in {"prepare_appointment", "prepare_appointment_cancellation"}:
+                continue
+            try:
+                result = json.loads(message.content)
+                if result.get("success") and isinstance(result.get("review"), dict):
+                    return result["review"]
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+        return None
+
+    @staticmethod
     def _extract_order_tracking(messages):
         for message in messages:
             if not isinstance(message, ToolMessage) or message.name != "track_customer_orders":
@@ -532,6 +545,7 @@ class AssistantService:
             )
 
         order_draft = cls._extract_order_draft(result["messages"])
+        appointment_review = cls._extract_appointment_review(result["messages"])
         order_tracking = cls._extract_order_tracking(result["messages"])
         requires_shipping_address = cls._extract_shipping_address_requirement(
             result["messages"]
@@ -613,6 +627,7 @@ class AssistantService:
                 metadata={
                     "products": products,
                     "order_draft": order_draft,
+                    "appointment_review": appointment_review,
                     "order_tracking": order_tracking,
                     "requires_shipping_address": requires_shipping_address,
                 },
@@ -630,6 +645,7 @@ class AssistantService:
             "response": response_text,
             "products": products,
             "order_draft": order_draft,
+                    "appointment_review": appointment_review,
             "order_tracking": order_tracking,
             "requires_shipping_address": requires_shipping_address,
             "created_at": assistant_message.created_at,

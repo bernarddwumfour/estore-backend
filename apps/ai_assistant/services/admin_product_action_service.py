@@ -14,6 +14,7 @@ from apps.products.schemas import (
 )
 from apps.products.services.category_service import CategoryService
 from apps.products.services.product_service import AdminProductService, ProductService
+from apps.ai_assistant.services.admin_service_action_service import SERVICE_ACTIONS, validate as validate_service_action, execute as execute_service_action
 
 ACTION_TTL_SECONDS = 600
 PRODUCT_BULK_ACTIONS = {
@@ -51,7 +52,9 @@ class AdminProductActionService:
         ids = [str(item) for item in payload.get("ids", [])]
         bulk_action = payload.get("bulk_action")
 
-        if action == "create_product":
+        if action in SERVICE_ACTIONS:
+            errors = validate_service_action(action, target_id, data)
+        elif action == "create_product":
             data, errors = validate_product_create(data, is_admin=True)
             if not errors and not Category.objects.filter(pk=data["category_id"]).exists():
                 errors = {"category_id": "Category not found"}
@@ -128,7 +131,9 @@ class AdminProductActionService:
         data, target_id, ids = payload["data"], payload["target_id"], payload["ids"]
         bulk_action = payload["bulk_action"]
 
-        if action == "create_product":
+        if action in SERVICE_ACTIONS:
+            return execute_service_action(action, target_id, data)
+        elif action == "create_product":
             data, errors = validate_product_create(data, is_admin=True)
             if errors:
                 return None, errors

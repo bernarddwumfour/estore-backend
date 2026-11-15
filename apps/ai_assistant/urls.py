@@ -27,4 +27,5 @@ urlpatterns = [
     path("admin/users/actions/<uuid:action_id>/confirm/", views.confirm_admin_user_action,
          name="confirm-admin-user-action"),
     path("orders/<uuid:draft_id>/confirm/", views.confirm_assistant_order, name="assistant-order-confirm"),
+    path("appointments/<uuid:action_id>/review/", views.appointment_review, name="assistant-appointment-review"),
 ]
