@@ -195,6 +195,7 @@ INSTALLED_APPS = [
     # Local apps
     "apps.users",
     "apps.products",
+    "apps.services",
     "apps.orders",
     "apps.common",
     "apps.promotions",
