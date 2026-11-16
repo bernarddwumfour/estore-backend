@@ -2,7 +2,7 @@ from typing import Annotated
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
-from typing_extensions import TypedDict
+from typing_extensions import TypedDict, NotRequired
 
 
 class ShopperState(TypedDict):
@@ -11,3 +11,4 @@ class ShopperState(TypedDict):
     """
 
     messages: Annotated[list[AnyMessage], add_messages]
+    social_channel: NotRequired[bool]

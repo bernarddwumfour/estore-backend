@@ -31,6 +31,25 @@ The same selector works with other management commands, for example
 payment and social credentials must be configured separately before enabling
 those integrations.
 
+### Social shopping agent
+
+Set `ZERNIO_WEBHOOK_SECRET` to the secret configured on the Zernio webhook and
+`STOREFRONT_BASE_URL` to the public storefront origin. Apply the social
+migrations and configure Zernio to send `message.received` events to the public
+`/api/social/webhooks/zernio` endpoint.
+
+Without Redis, run the database-backed worker in a separate process:
+
+```sh
+venv/bin/python manage_store.py iplug migrate social
+venv/bin/python manage_store.py iplug run_social_agent_worker
+```
+
+With `REDIS_URL` configured, run a Celery worker and Celery beat with the
+store's `ESTORE_ENV_FILE` instead. Enable replies for each connected account in
+the social inbox. The global AI and guest-agent controls must also be enabled.
+Interrupted sends are flagged for staff review rather than retried blindly.
+
 ## Product search embeddings
 
 Saving a product or saving/deleting a variant schedules a refresh after the

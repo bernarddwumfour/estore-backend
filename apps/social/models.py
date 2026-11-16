@@ -146,6 +146,47 @@ class SocialConfig(models.Model):
         return f"Social config ({self.mode})"
 
 
+class SocialAgentAccount(models.Model):
+    """Explicitly enabled Zernio accounts for automatic DM replies."""
+    account_id = models.CharField(max_length=255, unique=True)
+    enabled = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+
+class SocialAgentWorker(models.Model):
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    last_seen = models.DateTimeField(auto_now=True)
+
+
+class SocialAgentConversation(models.Model):
+    account_id = models.CharField(max_length=255)
+    conversation_id = models.CharField(max_length=255)
+    platform = models.CharField(max_length=40, blank=True)
+    paused = models.BooleanField(default=False)
+    needs_attention = models.BooleanField(default=False)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["account_id", "conversation_id"], name="social_agent_account_conversation_uniq")]
+
+
+class SocialAgentMessage(models.Model):
+    conversation = models.ForeignKey(SocialAgentConversation, on_delete=models.CASCADE, related_name="agent_messages")
+    event_id = models.CharField(max_length=255, unique=True)
+    provider_message_id = models.CharField(max_length=255, blank=True)
+    reply_message_id = models.CharField(max_length=255, blank=True)
+    received_at = models.DateTimeField(null=True, blank=True)
+    text = models.TextField()
+    response = models.TextField(blank=True)
+    status = models.CharField(max_length=20, default="pending", db_index=True)
+    error = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+
+
 class SandboxComment(models.Model):
     """Simulated comment on a post, used only in test mode."""
 

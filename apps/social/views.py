@@ -461,6 +461,11 @@ def admin_social_message_send(request, conversation_id):
         if errors:
             return APIResponse.validation_error(errors)
 
+        from apps.social.models import SocialAgentConversation
+        SocialAgentConversation.objects.update_or_create(
+            account_id=cleaned["account_id"], conversation_id=conversation_id,
+            defaults={"paused": True},
+        )
         result, error = ZernioService.send_message(
             conversation_id, cleaned["message"], account_id=cleaned["account_id"]
         )

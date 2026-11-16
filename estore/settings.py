@@ -57,6 +57,7 @@ TERMINAL_AFRICA_WEBHOOK_SECRET = config("TERMINAL_AFRICA_WEBHOOK_SECRET", defaul
 
 
 ZERNIO_API_KEY = config("ZERNIO_API_KEY", default="")
+ZERNIO_WEBHOOK_SECRET = config("ZERNIO_WEBHOOK_SECRET", default="")
 ZERNIO_BASE_URL = config("ZERNIO_BASE_URL", default="https://zernio.com/api/v1")
 # Optional comma-separated platform filter, e.g. "instagram,twitter". Empty = all connected accounts.
 ZERNIO_PLATFORMS = [p.strip() for p in config("ZERNIO_PLATFORMS", default="").split(",") if p.strip()]
@@ -154,6 +155,10 @@ else:
 CELERY_TASK_SERIALIZER = "json"
 CELERY_ACCEPT_CONTENT = ["json"]
 CELERY_BEAT_SCHEDULE = {
+    "recover-social-messages": {
+        "task": "apps.social.tasks.recover_social_messages",
+        "schedule": 60.0,
+    },
     "reconcile-product-embeddings": {
         "task": "apps.ai_assistant.tasks.reconcile_product_embeddings",
         "schedule": 3600.0,
