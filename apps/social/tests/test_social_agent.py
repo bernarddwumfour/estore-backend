@@ -9,6 +9,7 @@ from django.core.management import call_command
 
 from apps.social.models import SocialAgentAccount, SocialAgentConversation, SocialAgentMessage
 from apps.social.tasks import process_social_conversation
+from apps.social.tasks import _product_links
 from django.contrib.auth import get_user_model
 
 
@@ -118,3 +119,9 @@ class SocialAgentTests(TestCase):
         self.event["id"] = "event-2"
         self.assertEqual(self.post_event().status_code, 200)
         self.assertEqual(SocialAgentMessage.objects.count(), 1)
+
+    @override_settings(STOREFRONT_BASE_URL="https://shop.example")
+    def test_product_links_open_the_selected_variant(self):
+        products = [{"title": "Phone", "slug": "phone", "selected_variant_id": "pink-id",
+                     "variants": [{"id": "pink-id", "slug": "pink-128gb"}]}]
+        self.assertEqual(_product_links(products), ["Phone: https://shop.example/products/phone/pink-128gb"])

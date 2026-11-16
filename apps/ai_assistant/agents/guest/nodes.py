@@ -5,7 +5,7 @@ import time
 from langchain_core.messages import SystemMessage
 
 from apps.ai_assistant.agents.shopper.nodes import get_shopper_model
-from apps.ai_assistant.agents.guest.prompts import GUEST_SYSTEM_PROMPT
+from apps.ai_assistant.agents.guest.prompts import GUEST_SYSTEM_PROMPT, GUEST_SOCIAL_CONTEXT, GUEST_WEBSITE_CONTEXT
 from apps.ai_assistant.tools.guest import GUEST_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -18,19 +18,19 @@ def create_guest_assistant_node():
         tools = available_tools(GUEST_TOOLS, "guest")
         model_with_tools = model.bind_tools(tools) if tools else model
         started_at = time.perf_counter()
-        social_context = ""
+        channel_context = GUEST_WEBSITE_CONTEXT
         if state.get("social_channel"):
             from django.conf import settings
             from urllib.parse import urlparse
             site = settings.STOREFRONT_BASE_URL.rstrip("/")
             parsed = urlparse(site)
             public_site = parsed.scheme in {"http", "https"} and parsed.hostname not in {None, "localhost", "127.0.0.1", "::1"}
-            social_context = (" You are replying to a customer on social media. The customer cannot see website cards. "
-                "Answer concisely in plain text; do not claim a card is displayed. When relevant, provide verified product details "
-                "and direct the customer to the store. Do not use relative links. " +
-                ("Store website: " + site if public_site else "Do not provide a website link because no public storefront URL is configured."))
+            channel_context = GUEST_SOCIAL_CONTEXT + " " + (
+                "Store website: " + site if public_site else
+                "No public storefront URL is configured, so do not claim a product link is provided."
+            )
         response = model_with_tools.invoke([
-            SystemMessage(content=GUEST_SYSTEM_PROMPT + social_context),
+            SystemMessage(content=GUEST_SYSTEM_PROMPT + "\n" + channel_context),
             *state["messages"],
         ])
         usage = response.usage_metadata or {}
