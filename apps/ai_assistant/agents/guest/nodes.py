@@ -21,9 +21,14 @@ def create_guest_assistant_node():
         social_context = ""
         if state.get("social_channel"):
             from django.conf import settings
+            from urllib.parse import urlparse
+            site = settings.STOREFRONT_BASE_URL.rstrip("/")
+            parsed = urlparse(site)
+            public_site = parsed.scheme in {"http", "https"} and parsed.hostname not in {None, "localhost", "127.0.0.1", "::1"}
             social_context = (" You are replying to a customer on social media. The customer cannot see website cards. "
                 "Answer concisely in plain text; do not claim a card is displayed. When relevant, provide verified product details "
-                "and direct the customer to the store. Do not use relative links. Store website: " + settings.STOREFRONT_BASE_URL)
+                "and direct the customer to the store. Do not use relative links. " +
+                ("Store website: " + site if public_site else "Do not provide a website link because no public storefront URL is configured."))
         response = model_with_tools.invoke([
             SystemMessage(content=GUEST_SYSTEM_PROMPT + social_context),
             *state["messages"],

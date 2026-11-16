@@ -149,7 +149,7 @@ class SocialConfig(models.Model):
 class SocialAgentAccount(models.Model):
     """Explicitly enabled Zernio accounts for automatic DM replies."""
     account_id = models.CharField(max_length=255, unique=True)
-    enabled = models.BooleanField(default=False)
+    enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 

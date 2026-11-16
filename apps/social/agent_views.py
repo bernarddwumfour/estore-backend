@@ -48,7 +48,8 @@ def zernio_webhook(request):
         return JsonResponse({"error": "Invalid message details"}, status=400)
     if metadata.get("standby") or sender.get("isOwnAccount") or ZernioService._message_is_outgoing(message) or message.get("isFromMe"):
         return JsonResponse({"ok": True})
-    if not SocialAgentAccount.objects.filter(account_id=account_id, enabled=True).exists():
+    account_settings, _ = SocialAgentAccount.objects.get_or_create(account_id=account_id)
+    if not account_settings.enabled:
         return JsonResponse({"ok": True})
     # Without Redis the database-backed worker picks up the persisted row.
     use_celery = bool(getattr(settings, "REDIS_URL", "") and not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False))
@@ -94,7 +95,7 @@ def agent_account(request, account_id):
     else:
         item = SocialAgentAccount.objects.filter(account_id=account_id).first()
     worker = SocialAgentWorker.objects.filter(pk=1, last_seen__gte=timezone.now() - timedelta(minutes=2)).exists()
-    return APIResponse.success({"enabled": item.enabled if item else False,
+    return APIResponse.success({"enabled": item.enabled if item else True,
         "configured": bool(settings.ZERNIO_WEBHOOK_SECRET),
         "queue_backend": "redis" if getattr(settings, "REDIS_URL", "") else "database",
         "worker_online": worker if not getattr(settings, "REDIS_URL", "") else None}, "Social agent account settings")

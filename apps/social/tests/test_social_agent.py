@@ -108,3 +108,13 @@ class SocialAgentTests(TestCase):
         call_command("run_social_agent_worker", once=True)
         self.assertEqual(SocialAgentMessage.objects.get().status, "sent")
         send.assert_called_once()
+
+    @override_settings(REDIS_URL="", CELERY_TASK_ALWAYS_EAGER=True)
+    def test_new_accounts_default_on_and_existing_off_is_respected(self):
+        self.event["account"]["accountId"] = "new-account"
+        self.assertEqual(self.post_event().status_code, 200)
+        self.assertTrue(SocialAgentAccount.objects.get(account_id="new-account").enabled)
+        SocialAgentAccount.objects.filter(account_id="new-account").update(enabled=False)
+        self.event["id"] = "event-2"
+        self.assertEqual(self.post_event().status_code, 200)
+        self.assertEqual(SocialAgentMessage.objects.count(), 1)
