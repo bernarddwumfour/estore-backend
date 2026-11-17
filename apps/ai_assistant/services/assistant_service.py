@@ -35,7 +35,7 @@ class AssistantService:
     """
 
     @classmethod
-    def send_guest_message(cls, message, history=None, social_channel=False):
+    def send_guest_message(cls, message, history=None, social_channel=False, social_comment=False):
         """Run the public-only guest graph without creating an account conversation."""
         message = message.strip()
         if not message:
@@ -49,7 +49,7 @@ class AssistantService:
         messages.append(HumanMessage(content=message))
 
         result = get_guest_graph().invoke(
-            {"messages": messages, "social_channel": social_channel}, config={"recursion_limit": 12},
+            {"messages": messages, "social_channel": social_channel, "social_comment": social_comment}, config={"recursion_limit": 12},
         )
         response_text = cls._extract_text(result["messages"][-1])
         if not response_text.strip():

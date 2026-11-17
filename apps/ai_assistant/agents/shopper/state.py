@@ -12,3 +12,4 @@ class ShopperState(TypedDict):
 
     messages: Annotated[list[AnyMessage], add_messages]
     social_channel: NotRequired[bool]
+    social_comment: NotRequired[bool]

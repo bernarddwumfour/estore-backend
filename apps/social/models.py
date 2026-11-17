@@ -150,6 +150,7 @@ class SocialAgentAccount(models.Model):
     """Explicitly enabled Zernio accounts for automatic DM replies."""
     account_id = models.CharField(max_length=255, unique=True)
     enabled = models.BooleanField(default=True)
+    comments_enabled = models.BooleanField(default=True)
     updated_at = models.DateTimeField(auto_now=True)
 
 
@@ -191,6 +192,25 @@ class SocialAgentMessage(models.Model):
 
     class Meta:
         ordering = ["created_at", "id"]
+
+
+class SocialAgentComment(models.Model):
+    event_id = models.CharField(max_length=255, unique=True)
+    account_id = models.CharField(max_length=255)
+    platform = models.CharField(max_length=40)
+    post_id = models.CharField(max_length=255)
+    comment_id = models.CharField(max_length=255)
+    text = models.TextField()
+    post_content = models.TextField(blank=True)
+    response = models.TextField(blank=True)
+    status = models.CharField(max_length=20, default="pending", db_index=True)
+    error = models.CharField(max_length=500, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at", "id"]
+        constraints = [models.UniqueConstraint(fields=["account_id", "platform", "comment_id"], name="social_agent_comment_unique")]
 
 
 class SandboxComment(models.Model):

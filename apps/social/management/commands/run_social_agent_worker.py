@@ -2,8 +2,8 @@
 import time
 from django.core.management.base import BaseCommand
 from django.db import close_old_connections
-from apps.social.models import SocialAgentMessage, SocialAgentWorker
-from apps.social.tasks import flag_interrupted_social_messages, process_social_conversation
+from apps.social.models import SocialAgentComment, SocialAgentMessage, SocialAgentWorker
+from apps.social.tasks import flag_interrupted_social_messages, process_social_comment, process_social_conversation
 
 
 class Command(BaseCommand):
@@ -26,6 +26,9 @@ class Command(BaseCommand):
                 ).order_by().values_list('conversation_id', flat=True).distinct()[:50])
                 for thread_id in threads:
                     process_social_conversation.run(thread_id)
+                    SocialAgentWorker.objects.update_or_create(pk=1, defaults={})
+                for comment_id in SocialAgentComment.objects.filter(status='pending').values_list('pk', flat=True)[:50]:
+                    process_social_comment.run(comment_id)
                     SocialAgentWorker.objects.update_or_create(pk=1, defaults={})
                 if options['once']:
                     break

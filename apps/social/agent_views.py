@@ -13,7 +13,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django_ratelimit.decorators import ratelimit
 
-from apps.social.models import SocialAgentAccount, SocialAgentConversation, SocialAgentMessage, SocialAgentWorker, SocialConfig
+from apps.social.models import SocialAgentAccount, SocialAgentComment, SocialAgentConversation, SocialAgentMessage, SocialAgentWorker, SocialConfig
 from apps.social.zernio_service import ZernioService
 from apps.social.inbox_events import publish_inbox_change
 from apps.users.decorators.auth import role_required
@@ -34,8 +34,10 @@ def zernio_webhook(request):
         return JsonResponse({"error": "Invalid payload"}, status=400)
     if event.get("test"):
         return JsonResponse({"ok": True})
-    if event.get("event") in {"message.received", "message.sent", "message.edited", "message.deleted", "message.delivered", "message.read", "message.failed", "conversation.started"}:
+    if event.get("event") in {"comment.received", "message.received", "message.sent", "message.edited", "message.deleted", "message.delivered", "message.read", "message.failed", "conversation.started"}:
         publish_inbox_change()
+    if event.get("event") == "comment.received":
+        return receive_comment(event)
     if event.get("event") != "message.received":
         return JsonResponse({"ok": True})
     if SocialConfig.test_mode_active():
@@ -80,6 +82,37 @@ def zernio_webhook(request):
     return JsonResponse({"ok": True})
 
 
+def receive_comment(event):
+    if SocialConfig.test_mode_active(): return JsonResponse({"ok": True})
+    account, comment, post = event.get("account"), event.get("comment"), event.get("post")
+    if not all(isinstance(value, dict) for value in (account, comment, post)):
+        return JsonResponse({"error": "Missing comment details"}, status=400)
+    account_id = account.get("accountId") or account.get("id")
+    event_id = event.get("id")
+    comment_id = comment.get("id")
+    post_id = comment.get("postId") or post.get("id") or comment.get("platformPostId") or post.get("platformPostId")
+    platform = comment.get("platform") or account.get("platform")
+    author = comment.get("author")
+    text = comment.get("text")
+    if not all(isinstance(v, str) and 0 < len(v) <= 255 for v in (account_id, event_id, comment_id, post_id, platform)) or not isinstance(author, dict) or not isinstance(text, str) or any(c in post_id for c in "/?#"):
+        return JsonResponse({"error": "Invalid comment details"}, status=400)
+    if author.get("isOwnAccount") is True:
+        return JsonResponse({"ok": True})
+    account_settings, _ = SocialAgentAccount.objects.get_or_create(account_id=account_id)
+    if not account_settings.comments_enabled: return JsonResponse({"ok": True})
+    content = post.get("content")
+    defaults = {"event_id": event_id, "post_id": post_id, "text": text[:10000],
+                "post_content": content[:5000] if isinstance(content, str) else ""}
+    if author.get("isOwnAccount") is not False or not text.strip():
+        defaults.update(status="needs_attention", error="Cannot verify comment author or text")
+    row, _ = SocialAgentComment.objects.get_or_create(account_id=account_id, platform=platform.lower(), comment_id=comment_id, defaults=defaults)
+    if row.status == "pending" and getattr(settings, "REDIS_URL", "") and not getattr(settings, "CELERY_TASK_ALWAYS_EAGER", False):
+        try:
+            from apps.social.tasks import process_social_comment
+            process_social_comment.delay(row.pk)
+        except Exception:
+            return JsonResponse({"error": "Could not queue comment"}, status=503)
+    return JsonResponse({"ok": True})
 @csrf_exempt
 @require_http_methods(["GET", "PUT"])
 @role_required("admin", "staff")
@@ -88,19 +121,19 @@ def agent_account(request, account_id):
     if request.method == "PUT":
         try:
             data = json.loads(request.body)
-            if not isinstance(data, dict) or not isinstance(data.get("enabled"), bool): raise ValueError
+            if not isinstance(data, dict) or not data or set(data) - {"enabled", "comments_enabled"} or any(not isinstance(value, bool) for value in data.values()): raise ValueError
         except (ValueError, UnicodeDecodeError): return APIResponse.bad_request("A boolean enabled value is required")
-        if data["enabled"]:
+        if any(data.values()):
             if not settings.ZERNIO_WEBHOOK_SECRET:
                 return APIResponse.bad_request("Configure the webhook secret before enabling automatic replies")
             accounts, error = ZernioService.list_accounts(use_cache=False)
             if error: return APIResponse.bad_request("Unable to verify the connected account")
             if not any(str(a.get("id") or a.get("_id") or a.get("accountId")) == account_id for a in accounts): return APIResponse.not_found("Connected account not found")
-        item, _ = SocialAgentAccount.objects.update_or_create(account_id=account_id, defaults={"enabled": data["enabled"]})
+        item, _ = SocialAgentAccount.objects.update_or_create(account_id=account_id, defaults=data)
     else:
         item = SocialAgentAccount.objects.filter(account_id=account_id).first()
     worker = SocialAgentWorker.objects.filter(pk=1, last_seen__gte=timezone.now() - timedelta(minutes=2)).exists()
-    return APIResponse.success({"enabled": item.enabled if item else True,
+    return APIResponse.success({"enabled": item.enabled if item else True, "comments_enabled": item.comments_enabled if item else True,
         "configured": bool(settings.ZERNIO_WEBHOOK_SECRET),
         "queue_backend": "redis" if getattr(settings, "REDIS_URL", "") else "database",
         "worker_online": worker if not getattr(settings, "REDIS_URL", "") else None}, "Social agent account settings")
@@ -126,3 +159,15 @@ def agent_conversation(request, conversation_id):
     if thread:
         entries = list(thread.agent_messages.order_by("-created_at").values("provider_message_id", "reply_message_id", "status", "error")[:50])
     return APIResponse.success({"paused": thread.paused if thread else False, "needs_attention": thread.needs_attention if thread else False, "activity": entries}, "Social agent conversation settings")
+
+
+@require_http_methods(["GET"])
+@role_required("admin", "staff")
+@ratelimit(key="user", rate="100/h", method="GET", block=True)
+def agent_comments(request):
+    account_id = request.GET.get("account_id", "")
+    if not account_id or len(account_id) > 255: return APIResponse.bad_request("Account ID is required")
+    records = SocialAgentComment.objects.filter(account_id=account_id).order_by("-created_at")[:50]
+    return APIResponse.success({"comments": [{"id": str(c.pk), "post_id": c.post_id, "comment_id": c.comment_id,
+        "text": c.text, "response": c.response, "status": c.status, "error": c.error,
+        "created_at": c.created_at.isoformat()} for c in records]}, "Comment agent activity")
