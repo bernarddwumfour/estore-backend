@@ -158,6 +158,12 @@ class SocialAgentWorker(models.Model):
     last_seen = models.DateTimeField(auto_now=True)
 
 
+class SocialInboxRevision(models.Model):
+    """Shared invalidation counter for connected staff inboxes."""
+    id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
+    revision = models.BigIntegerField(default=0)
+
+
 class SocialAgentConversation(models.Model):
     account_id = models.CharField(max_length=255)
     conversation_id = models.CharField(max_length=255)

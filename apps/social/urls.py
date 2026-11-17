@@ -4,6 +4,7 @@ Social URLs
 
 from django.urls import path
 from apps.social.agent_views import zernio_webhook, agent_account, agent_conversation
+from apps.social.stream_views import social_inbox_stream
 
 from apps.social.views import (
     admin_social_accounts,
@@ -34,6 +35,7 @@ from apps.social.views import (
 app_name = "social"
 
 urlpatterns = [
+    path("/admin/inbox/events", social_inbox_stream, name="social-inbox-events"),
     path("/webhooks/zernio", zernio_webhook, name="zernio-webhook"),
     path("/admin/agent/accounts/<str:account_id>", agent_account, name="agent-account"),
     path("/admin/agent/conversations/<str:conversation_id>", agent_conversation, name="agent-conversation"),

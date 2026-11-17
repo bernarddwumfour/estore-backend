@@ -51,6 +51,8 @@ def process_social_conversation(thread_id):
                 row.save(update_fields=["status", "error", "updated_at"])
                 thread.paused, thread.needs_attention = True, True
                 thread.save(update_fields=["paused", "needs_attention", "updated_at"])
+                from apps.social.inbox_events import publish_inbox_change
+                transaction.on_commit(publish_inbox_change)
                 return
             if re.search(r"\b(human|real person|speak to (?:a |an )?(?:person|agent|staff)|talk to (?:a |an )?(?:person|agent|staff))\b", row.text, re.IGNORECASE):
                 row.status, row.error = "needs_attention", "Customer requested staff"
@@ -58,6 +60,8 @@ def process_social_conversation(thread_id):
                 thread.paused = True
                 thread.needs_attention = True
                 thread.save(update_fields=["paused", "needs_attention", "updated_at"])
+                from apps.social.inbox_events import publish_inbox_change
+                transaction.on_commit(publish_inbox_change)
                 return
             if not row.text.strip():
                 row.status, row.error = "needs_attention", "Message has no supported text"
@@ -65,6 +69,8 @@ def process_social_conversation(thread_id):
                 thread.needs_attention = True
                 thread.paused = True
                 thread.save(update_fields=["paused", "needs_attention", "updated_at"])
+                from apps.social.inbox_events import publish_inbox_change
+                transaction.on_commit(publish_inbox_change)
                 return
             history = []
             for previous in thread.agent_messages.filter(status="sent", pk__lt=row.pk).order_by("-created_at", "-id")[:6][::-1]:
@@ -102,12 +108,18 @@ def process_social_conversation(thread_id):
                     thread.needs_attention = True
                     thread.paused = True
                     thread.save(update_fields=["paused", "needs_attention", "updated_at"])
+                    from apps.social.inbox_events import publish_inbox_change
+                    transaction.on_commit(publish_inbox_change)
                     return
+            from apps.social.inbox_events import publish_inbox_change
+            publish_inbox_change()
         except Exception:
             logger.exception("Social guest agent failed for event %s", row.event_id)
             with transaction.atomic():
                 SocialAgentMessage.objects.filter(pk=row.pk).update(status="needs_attention", error="Agent processing failed")
                 SocialAgentConversation.objects.filter(pk=thread_id).update(needs_attention=True, paused=True)
+                from apps.social.inbox_events import publish_inbox_change
+                transaction.on_commit(publish_inbox_change)
             return
 
 

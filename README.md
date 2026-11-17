@@ -50,6 +50,15 @@ store's `ESTORE_ENV_FILE` instead. Enable replies for each connected account in
 the social inbox. The global AI and guest-agent controls must also be enabled.
 Interrupted sends are flagged for staff review rather than retried blindly.
 
+The staff inbox uses an authenticated server-sent event stream for refresh
+notifications. Each stream lasts up to 45 seconds and checks a shared database
+revision every two seconds; the browser reconnects and falls back to slower
+polling if streaming is unavailable. WSGI deployments must use threaded or
+otherwise concurrent workers, allow long-lived streaming responses, and disable
+proxy buffering for this endpoint. The Render start command uses threaded
+Gunicorn workers. At larger scale, replace the per-stream database checks with a
+shared publish/subscribe service.
+
 ## Product search embeddings
 
 Saving a product or saving/deleting a variant schedules a refresh after the

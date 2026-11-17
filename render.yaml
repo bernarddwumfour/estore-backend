@@ -5,7 +5,7 @@ services:
     plan: free
     region: oregon
     buildCommand: "./build.sh"
-    startCommand: "gunicorn estore.wsgi:application"
+    startCommand: "gunicorn estore.wsgi:application --worker-class gthread --threads 8 --timeout 75"
     envVars:
       - key: DATABASE_URL
         fromDatabase:

@@ -15,6 +15,7 @@ from django_ratelimit.decorators import ratelimit
 
 from apps.social.models import SocialAgentAccount, SocialAgentConversation, SocialAgentMessage, SocialAgentWorker, SocialConfig
 from apps.social.zernio_service import ZernioService
+from apps.social.inbox_events import publish_inbox_change
 from apps.users.decorators.auth import role_required
 from estore.utils.responses import APIResponse
 
@@ -31,7 +32,11 @@ def zernio_webhook(request):
         if not isinstance(event, dict): raise ValueError
     except (ValueError, UnicodeDecodeError):
         return JsonResponse({"error": "Invalid payload"}, status=400)
-    if event.get("event") != "message.received" or event.get("test"):
+    if event.get("test"):
+        return JsonResponse({"ok": True})
+    if event.get("event") in {"message.received", "message.sent", "message.edited", "message.deleted", "message.delivered", "message.read", "message.failed", "conversation.started"}:
+        publish_inbox_change()
+    if event.get("event") != "message.received":
         return JsonResponse({"ok": True})
     if SocialConfig.test_mode_active():
         return JsonResponse({"ok": True})
@@ -114,6 +119,7 @@ def agent_conversation(request, conversation_id):
             if not isinstance(data, dict) or not isinstance(data.get("paused"), bool): raise ValueError
         except (ValueError, UnicodeDecodeError): return APIResponse.bad_request("A boolean paused value is required")
         thread, _ = SocialAgentConversation.objects.update_or_create(account_id=account_id, conversation_id=conversation_id, defaults={"paused": data["paused"], "needs_attention": False})
+        publish_inbox_change()
     else:
         thread = SocialAgentConversation.objects.filter(account_id=account_id, conversation_id=conversation_id).first()
     entries = []

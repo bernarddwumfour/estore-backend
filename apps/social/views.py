@@ -472,6 +472,8 @@ def admin_social_message_send(request, conversation_id):
         if error:
             return APIResponse.bad_request(error)
 
+        from apps.social.inbox_events import publish_inbox_change
+        publish_inbox_change()
         return APIResponse.success(message="Message sent successfully")
     except Exception as e:
         logger.error(f"Admin social message send error: {str(e)}")
