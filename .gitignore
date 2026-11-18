@@ -7,6 +7,10 @@ local_settings.py
 db.sqlite3
 media/
 staticfiles/
+/oliveandaura-product-images/
+/tmp_crop_tyre_batch.mjs
+/tmp_repair_triangle.py
+/tmp_upload_tyre_batch.py
 
 # Environment
 .env
