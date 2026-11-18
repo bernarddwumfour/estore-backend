@@ -16,6 +16,7 @@ from django_ratelimit.decorators import ratelimit
 from apps.social.models import SocialAgentAccount, SocialAgentComment, SocialAgentConversation, SocialAgentMessage, SocialAgentWorker, SocialConfig
 from apps.social.zernio_service import ZernioService
 from apps.social.inbox_events import publish_inbox_change
+from apps.social.conversation_control import ai_available
 from apps.users.decorators.auth import role_required
 from estore.utils.responses import APIResponse
 
@@ -130,6 +131,7 @@ def agent_account(request, account_id):
             if error: return APIResponse.bad_request("Unable to verify the connected account")
             if not any(str(a.get("id") or a.get("_id") or a.get("accountId")) == account_id for a in accounts): return APIResponse.not_found("Connected account not found")
         item, _ = SocialAgentAccount.objects.update_or_create(account_id=account_id, defaults=data)
+        publish_inbox_change()
     else:
         item = SocialAgentAccount.objects.filter(account_id=account_id).first()
     worker = SocialAgentWorker.objects.filter(pk=1, last_seen__gte=timezone.now() - timedelta(minutes=2)).exists()
@@ -151,14 +153,30 @@ def agent_conversation(request, conversation_id):
             data = json.loads(request.body)
             if not isinstance(data, dict) or not isinstance(data.get("paused"), bool): raise ValueError
         except (ValueError, UnicodeDecodeError): return APIResponse.bad_request("A boolean paused value is required")
-        thread, _ = SocialAgentConversation.objects.update_or_create(account_id=account_id, conversation_id=conversation_id, defaults={"paused": data["paused"], "needs_attention": False})
+        with transaction.atomic():
+            thread, _ = SocialAgentConversation.objects.get_or_create(account_id=account_id, conversation_id=conversation_id)
+            thread = SocialAgentConversation.objects.select_for_update().get(pk=thread.pk)
+            if not data["paused"] and not ai_available(account_id):
+                return APIResponse.bad_request("Enable the guest assistant and social AI replies before handing over to AI")
+            if data["paused"] and thread.agent_messages.filter(status="sending").exists():
+                return APIResponse.conflict("An AI reply is being sent. Please try again in a moment.")
+            # Messages received while staff is handling the conversation were handled by staff.
+            if thread.paused != data["paused"]:
+                thread.agent_messages.filter(status__in=["pending", "processing"]).update(status="handed_over", error="Conversation handed over")
+            thread.paused = data["paused"]
+            thread.needs_attention = False
+            thread.save(update_fields=["paused", "needs_attention", "updated_at"])
         publish_inbox_change()
     else:
         thread = SocialAgentConversation.objects.filter(account_id=account_id, conversation_id=conversation_id).first()
     entries = []
     if thread:
         entries = list(thread.agent_messages.order_by("-created_at").values("provider_message_id", "reply_message_id", "status", "error")[:50])
-    return APIResponse.success({"paused": thread.paused if thread else False, "needs_attention": thread.needs_attention if thread else False, "activity": entries}, "Social agent conversation settings")
+    available = ai_available(account_id)
+    paused = thread.paused if thread else False
+    return APIResponse.success({"paused": paused, "ai_available": available,
+        "handler": "ai" if available and not paused else "staff",
+        "needs_attention": thread.needs_attention if thread else False, "activity": entries}, "Social agent conversation settings")
 
 
 @require_http_methods(["GET"])

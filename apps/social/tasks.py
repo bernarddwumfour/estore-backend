@@ -40,7 +40,7 @@ def process_social_conversation(thread_id):
     while True:
         with transaction.atomic():
             thread = SocialAgentConversation.objects.select_for_update().filter(pk=thread_id).first()
-            if not thread or thread.paused or not SocialAgentAccount.objects.filter(account_id=thread.account_id, enabled=True).exists() or not enabled("guest"):
+            if not thread or thread.paused or not settings.ZERNIO_WEBHOOK_SECRET or not SocialAgentAccount.objects.filter(account_id=thread.account_id, enabled=True).exists() or not enabled("guest"):
                 return
             if thread.agent_messages.filter(status__in=["processing", "sending"]).exists():
                 return
@@ -86,7 +86,9 @@ def process_social_conversation(thread_id):
             with transaction.atomic():
                 thread = SocialAgentConversation.objects.select_for_update().get(pk=thread_id)
                 row = SocialAgentMessage.objects.select_for_update().get(pk=row.pk)
-                if thread.paused or not SocialAgentAccount.objects.filter(account_id=thread.account_id, enabled=True).exists() or not enabled("guest"):
+                if row.status != "processing":
+                    return
+                if thread.paused or not settings.ZERNIO_WEBHOOK_SECRET or not SocialAgentAccount.objects.filter(account_id=thread.account_id, enabled=True).exists() or not enabled("guest"):
                     row.status = "needs_attention"
                     row.error = "Agent paused before sending"
                     row.save(update_fields=["status", "error", "updated_at"])

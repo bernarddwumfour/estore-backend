@@ -461,14 +461,22 @@ def admin_social_message_send(request, conversation_id):
         if errors:
             return APIResponse.validation_error(errors)
 
+        from django.db import transaction
         from apps.social.models import SocialAgentConversation
-        SocialAgentConversation.objects.update_or_create(
-            account_id=cleaned["account_id"], conversation_id=conversation_id,
-            defaults={"paused": True},
-        )
-        result, error = ZernioService.send_message(
-            conversation_id, cleaned["message"], account_id=cleaned["account_id"]
-        )
+        from apps.social.conversation_control import ai_available
+        with transaction.atomic():
+            thread, _ = SocialAgentConversation.objects.get_or_create(account_id=cleaned["account_id"], conversation_id=conversation_id)
+            thread = SocialAgentConversation.objects.select_for_update().get(pk=thread.pk)
+            if not thread.paused and ai_available(cleaned["account_id"]):
+                return APIResponse.conflict("Take over from AI before sending a message")
+            if thread.agent_messages.filter(status="sending").exists():
+                return APIResponse.conflict("An AI reply is being sent. Please try again in a moment.")
+            if not thread.paused:
+                thread.paused = True
+                thread.save(update_fields=["paused", "updated_at"])
+            result, error = ZernioService.send_message(
+                conversation_id, cleaned["message"], account_id=cleaned["account_id"]
+            )
         if error:
             return APIResponse.bad_request(error)
 
