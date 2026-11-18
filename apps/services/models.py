@@ -122,6 +122,21 @@ class ServiceImage(models.Model):
         ordering = ["order", "created_at"]
 
 
+class ServiceRequest(models.Model):
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    service = models.ForeignKey(Service, null=True, blank=True, on_delete=models.SET_NULL, related_name="requests")
+    custom_service_type = models.CharField(max_length=200, blank=True)
+    device_model = models.CharField(max_length=200)
+    customer_name = models.CharField(max_length=200)
+    customer_email = models.EmailField()
+    customer_phone = models.CharField(max_length=40)
+    issue_description = models.TextField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+
+
 class BookingSettings(models.Model):
     """The single store schedule and lock used when allocating appointments."""
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)

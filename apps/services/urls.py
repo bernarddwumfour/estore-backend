@@ -4,6 +4,7 @@ from .views.category_views import category_list, category_detail, admin_service_
 from .views.option_views import admin_service_options, admin_service_option_detail
 from .views.image_views import admin_service_images, admin_service_image_delete
 from .views.logging import log_service_request
+from .views.request_views import service_requests, admin_service_requests
 from .views.booking_views import slots, appointments, appointment_detail, booking_settings, admin_appointments, admin_appointment_detail, booking_exceptions
 
 app_name = "services"
@@ -16,6 +17,8 @@ urlpatterns = [
     path("/admin/booking-settings", booking_settings, name="booking-settings"),
     path("/admin/appointments", admin_appointments, name="admin-appointments"),
     path("/admin/appointments/<uuid:appointment_id>", admin_appointment_detail, name="admin-appointment-detail"),
+    path("/requests", service_requests, name="service-requests"),
+    path("/admin/requests", admin_service_requests, name="admin-service-requests"),
     path("", service_list, name="service-list"),
     path("categories", category_list, name="category-list"),
     path("categories/<slug:slug>", category_detail, name="category-detail"),

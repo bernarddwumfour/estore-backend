@@ -1,5 +1,8 @@
 # Agent change log
 
+## 2026-11-18 — iPlug service API and request submission
+Added `apps/services/management/commands/seed_iplug_services.py` to create four published iPlug services with quote-based, timed options. Added `ServiceRequest` in `apps/services/models.py` and migration `apps/services/migrations/0003_servicerequest.py`; added validation, write service, and public/staff endpoints in `apps/services/schemas/request_schemas.py`, `apps/services/services/request_service.py`, `apps/services/views/request_views.py`, and `apps/services/urls.py`. Added `apps/services/tests/test_requests.py`. The iPlug database was seeded and migrated; the public service list returned all four services. Frontend `src/app/(web)/services/page.tsx` now reads that catalog and submits requests. Frontend `src/app/dashboard/appointments/page.tsx` now shows appointments and service requests on the left in a responsive 2:1 layout. Existing catalog records are preserved by the seed command. Storefront cache revalidation logged connection refusals because the local frontend server was not running; the service data writes succeeded.
+
 ## 2026-11-10
 Added AI controls to common/models.py and schemas/general_schemas.py; added ai_assistant/features.py; updated all three agents nodes.py and graph.py, ai_assistant/views.py and embeddings/search.py for runtime enforcement. Added products/services/discovery_service.py and wired products/views/product_views.py to semantic fallback. Migration and tests accompany this change. Settings are read from the database so toggles apply across processes. Existing keyword search stays available when AI is disabled.
 
