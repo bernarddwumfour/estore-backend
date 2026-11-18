@@ -12,7 +12,38 @@ def _admin(view):
 
 from django.db import transaction
 from django.db import IntegrityError
+from django.db.models.deletion import ProtectedError
+from django.core.paginator import Paginator
+from django.db.models import Q
 from apps.services.services.service_service import create_option, update_option, delete_option
+
+@csrf_exempt
+@require_http_methods(["GET"])
+@_admin
+@ratelimit(key="user", rate="100/h", method="GET", block=True)
+def admin_all_service_options(request):
+    options = ServiceOption.objects.select_related("service")
+    search = sanitize_search_query(request.GET.get("search", ""))
+    if search:
+        options = options.filter(Q(name__icontains=search) | Q(service__title__icontains=search))
+    active = request.GET.get("is_active")
+    if active in ("true", "false"):
+        options = options.filter(is_active=active == "true")
+    try:
+        page = max(1, int(request.GET.get("page", 1)))
+        limit = min(100, max(1, int(request.GET.get("limit", 20))))
+    except ValueError:
+        return APIResponse.bad_request("Page and limit must be integers")
+    current = Paginator(options.order_by("service__title", "sort_order", "name"), limit).get_page(page)
+    return APIResponse.success({
+        "options": [
+            {**serialize_option(option, True), "service": {
+                "id": str(option.service_id), "title": option.service.title, "status": option.service.status,
+            }} for option in current.object_list
+        ],
+        "total": current.paginator.count,
+        "pagination": {"page": current.number, "limit": limit, "total_pages": current.paginator.num_pages},
+    }, "Service options retrieved")
 
 @csrf_exempt
 @require_http_methods(["GET", "POST"])
@@ -46,6 +77,8 @@ def admin_service_option_detail(request, service_id, option_id):
             return APIResponse.no_content()
         except ValueError as e:
             return APIResponse.validation_error({"option": str(e)})
+        except ProtectedError:
+            return APIResponse.conflict("This option is used by an appointment and cannot be deleted")
     try:
         values = _option_payload(_payload(request), option.service, option)
         option = update_option(option, values)

@@ -1,5 +1,7 @@
 import logging
+from io import BytesIO
 
+from django.http.multipartparser import MultiPartParser, MultiPartParserError
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from django_ratelimit.decorators import ratelimit
@@ -10,6 +12,19 @@ from apps.services.models import Service, ServiceCategory, ServiceImage, Service
 from apps.services.schemas import serialize_category, serialize_option, serialize_image, serialize_service, _payload, _bool, _slug, _service_payload, _option_payload, category_payload
 
 logger = logging.getLogger(__name__)
+
+
+def category_request_data(request):
+    """Read JSON or a category image upload, including multipart PATCH requests."""
+    if request.method in ("PUT", "PATCH") and "multipart/form-data" in request.content_type:
+        try:
+            fields, files = MultiPartParser(
+                request.META, BytesIO(request.body), request.upload_handlers, request.encoding
+            ).parse()
+        except MultiPartParserError as exc:
+            raise ValueError("Invalid category upload") from exc
+        return fields.dict(), files.get("image")
+    return _payload(request), request.FILES.get("image")
 
 def _admin(view):
     return role_required("admin", "staff")(view)
@@ -49,9 +64,9 @@ def admin_service_categories(request):
         if request.GET.get("status") != "all": qs = qs.filter(is_active=True)
         return APIResponse.success({"categories": [serialize_category(c, True) for c in qs]}, "Service categories retrieved")
     try:
-        data = _payload(request)
-        validate_category_image(request.FILES.get("image"))
-        category = create_category(category_payload(data), request.FILES.get("image"))
+        data, image_file = category_request_data(request)
+        validate_category_image(image_file)
+        category = create_category(category_payload(data), image_file)
         return APIResponse.created({"category": serialize_category(category, True)}, "Service category created")
     except (ValueError, ServiceCategory.DoesNotExist) as e: return APIResponse.validation_error({"category": str(e)})
     except IntegrityError: return APIResponse.conflict("Category name or slug already exists")
@@ -73,8 +88,7 @@ def admin_service_category_detail(request, category_id):
         if category.services.exists() or category.children.exists(): return APIResponse.conflict("Move or remove its services and child categories first")
         delete_category(category); return APIResponse.no_content()
     try:
-        data = _payload(request)
-        image_file = request.FILES.get("image")
+        data, image_file = category_request_data(request)
         validate_category_image(image_file)
         category = update_category(category, category_payload(data, category), image_file)
         return APIResponse.success({"category": serialize_category(category, True)}, "Category updated")
