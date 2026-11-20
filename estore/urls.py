@@ -19,6 +19,7 @@ urlpatterns = [
                 path("orders", include("apps.orders.urls")),
                 path("common", include("apps.common.urls")),
                 path("marketing", include("apps.marketing.urls")),
+                path("templates", include("apps.templates.urls")),
                 path("social", include("apps.social.urls")),
                 path("blog", include("apps.blog.urls")),
 

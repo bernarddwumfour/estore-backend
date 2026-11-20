@@ -205,6 +205,7 @@ INSTALLED_APPS = [
     "apps.common",
     "apps.promotions",
     "apps.marketing",
+    "apps.templates",
     "apps.social",
     "apps.blog",
     "apps.ai_assistant",
