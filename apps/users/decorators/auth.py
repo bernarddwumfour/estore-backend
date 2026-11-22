@@ -23,6 +23,11 @@ def jwt_required(view_func):
 
     @wraps(view_func)
     def wrapper(request, *args, **kwargs):
+        if getattr(request, "bff_user", None):
+            request.user = request.bff_user
+            request.token_payload = None
+            return view_func(request, *args, **kwargs)
+
         # Get token from Authorization header
         auth_header = request.headers.get("Authorization", "")
 
@@ -73,6 +78,11 @@ def jwt_optional(view_func):
         # Initialize user as None
         request.user = None
         request.token_payload = None
+
+        if getattr(request, "bff_user", None):
+            request.user = request.bff_user
+            request.token_payload = None
+            return view_func(request, *args, **kwargs)
 
         # Get token from Authorization header
         auth_header = request.headers.get("Authorization", "")

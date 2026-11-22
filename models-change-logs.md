@@ -25,3 +25,128 @@ Moved the semantic switch check from ai_assistant/embeddings/search.py to produc
 
 ## 2026-11-10 — Label related search results
 Updated products/services/discovery_service.py and products/views/product_views.py to return result_type (matching, related, none). Updated ai_assistant/tests/test_feature_controls.py to verify provenance and fallback states. Updated frontend src/widgets/search-modal/SearchModal.tsx to distinguish matching search results from related products and explain the fallback. Scope is the search dialog only.
+
+
+## 2026-11-22 — Next.js BFF with database-backed browser sessions
+
+Implemented an opaque HttpOnly session cookie and a same-origin Next.js BFF.
+Redis configuration is deliberately unchanged. Django stores only session-ID
+hashes in the existing database, checks expiry/account status/password fingerprints,
+and retains all role/ownership checks. The BFF authenticates itself with a per-store
+shared secret. Legacy direct JWT clients remain supported; their existing cache-based
+revocation limitations are unchanged. Browser JWT storage and refresh interceptors
+were removed. Login, logout, profile restoration, private SSR orders/profile pages,
+CSR dashboard, checkout, wishlist, assistant, payment returns, uploads, and inbox
+streaming now use sessions. Public product SSR and cache tags are unchanged.
+
+The session cookie is store-specific (localhost cookies are not port-scoped),
+HttpOnly and SameSite=Lax, with Secure and the __Host- prefix in production. Mutations
+require an exact Origin and custom CSRF header; the BFF does not authorize cross-origin
+preflight requests. The proxy fixes its upstream destination, discards browser
+credentials, strips JSON credentials, rejects redirects/debug HTML, and preserves
+multipart bodies and SSE. Password changes invalidate BFF sessions on the next
+request. Login/session failure handling preserves temporary-outage distinctions and
+clears private React Query data across logout/account changes. Profile now includes
+is_affiliate so restored sessions preserve affiliate navigation.
+
+Validation: 19 focused frontend tests and 12 browser-session backend tests pass.
+The full users suite passed 24 tests before the final affiliate regression was added;
+that regression passes in the 12-test session suite. Core BFF ESLint and migration
+consistency checks pass. The broad frontend suite reported 150 passes and four
+unrelated failures in Cart, DataTable, and Slider. Full tsc reports the existing
+ProductDetailPageContent extra export in generated oliveandaura route types.
+No production migration, secret provisioning, deployment, or Redis operation was
+performed. Before rollout apply users.0024_browsersession to each store, configure
+matching BFF_SHARED_SECRET values, DJANGO_API_URL and BFF_ORIGIN, and configure a
+trusted ingress client-IP header where not on Vercel. See the READMEs and frontend
+.env.bff.example. Existing browser sessions must log in again. The user's pre-existing
+template editor changes were left untouched.
+
+Files added/changed (grouped by their roles above):
+- `estore-backend/.env.example`
+- `estore-backend/README.md`
+- `estore-backend/apps/users/bff_middleware.py`
+- `estore-backend/apps/users/decorators/auth.py`
+- `estore-backend/apps/users/management/__init__.py`
+- `estore-backend/apps/users/management/commands/__init__.py`
+- `estore-backend/apps/users/management/commands/clear_browser_sessions.py`
+- `estore-backend/apps/users/migrations/0024_browsersession.py`
+- `estore-backend/apps/users/models/__init__.py`
+- `estore-backend/apps/users/models/browser_session.py`
+- `estore-backend/apps/users/services/browser_session_service.py`
+- `estore-backend/apps/users/tests/test_browser_sessions.py`
+- `estore-backend/apps/users/views/auth_views.py`
+- `estore-backend/apps/users/views/profile_views.py`
+- `estore-backend/estore/settings.py`
+- `estore-backend/render.yaml`
+- `estore-frontend/.env.bff.example`
+- `estore-frontend/.gitignore`
+- `estore-frontend/README.md`
+- `estore-frontend/package-lock.json`
+- `estore-frontend/package.json`
+- `estore-frontend/src/app/(auth)/change-password/layout.tsx`
+- `estore-frontend/src/app/(web)/checkout/page.tsx`
+- `estore-frontend/src/app/(web)/order-placed/page.tsx`
+- `estore-frontend/src/app/(web)/orders/[id]/page.tsx`
+- `estore-frontend/src/app/(web)/orders/callback/page.tsx`
+- `estore-frontend/src/app/(web)/orders/page.tsx`
+- `estore-frontend/src/app/(web)/orders/success/page.tsx`
+- `estore-frontend/src/app/(web)/profile/layout.tsx`
+- `estore-frontend/src/app/(web)/wishlist/page.tsx`
+- `estore-frontend/src/app/api/bff/[...path]/route.test.ts`
+- `estore-frontend/src/app/api/bff/[...path]/route.ts`
+- `estore-frontend/src/app/dashboard/DashboardShell.tsx`
+- `estore-frontend/src/app/dashboard/layout.tsx`
+- `estore-frontend/src/app/dashboard/marketing/social/inbox/page.tsx`
+- `estore-frontend/src/app/lib/hooks/use-fetch-wishlist.ts`
+- `estore-frontend/src/axios-instances/SecurityAxios.ts`
+- `estore-frontend/src/axios-instances/UnAuthenticatedAxios.ts`
+- `estore-frontend/src/lib/auth/cookie.ts`
+- `estore-frontend/src/lib/providers/auth-provider.test.tsx`
+- `estore-frontend/src/lib/providers/auth-provider.tsx`
+- `estore-frontend/src/lib/server/backend.ts`
+- `estore-frontend/src/lib/server/bff-policy.test.ts`
+- `estore-frontend/src/lib/server/bff-policy.ts`
+- `estore-frontend/src/middleware.ts`
+- `estore-frontend/src/widgets/ai-assistant/AssistantLauncher.tsx`
+- `estore-frontend/src/widgets/ai-assistant/ChatAssistant.tsx`
+
+
+## 2026-11-22 — Configure demo BFF environment credentials
+
+Added a separately generated 64-character BFF_SHARED_SECRET for each demo store,
+matching between its frontend and backend. Default .env uses the iPlug secret
+because both default processes target the iPlug ports. Frontend DJANGO_API_URL
+uses each existing public API URL; BFF_ORIGIN matches localhost ports 3000–3003.
+Verified all pairs match and the four stores have distinct secrets without
+printing values. Example files retain placeholders. No Redis, database migration,
+service restart, or hosted Render/Vercel configuration was changed.
+
+Files changed:
+- `estore-frontend/.env.iplug`
+- `estore-backend/.env.iplug`
+- `estore-frontend/.env`
+- `estore-backend/.env`
+- `estore-frontend/.env.oakandloom`
+- `estore-backend/.env.oakandloom`
+- `estore-frontend/.env.tyrepapa`
+- `estore-backend/.env.tyrepapa`
+- `estore-frontend/.env.oliveandaura`
+- `estore-backend/.env.oliveandaura`
+
+
+## 2026-11-22 — Rewrite both repository READMEs
+
+Replaced starter/append-only documentation in estore-frontend/README.md and
+estore-backend/README.md with complete repository guides. Reviewed package scripts,
+store registry/runner, Django settings/routes/commands, BFF session flow, workers,
+integrations, revalidation handlers, Render configuration, and current test results.
+Documented features, architecture, exact store selectors/ports, environment setup,
+BFF vs JWT authentication, CSR/private SSR/public caching, integrations, maintenance,
+testing, deployment order, known limitations, and troubleshooting. Validated local
+Markdown links and code fences. No live credentials are included. This entry is
+also a change to estore-backend/models-change-logs.md.
+
+Pre-push review also replaced pre-existing Django/JWT signing-key values in
+`estore-backend/.env.example` with explicit placeholders. Real local profiles remain
+ignored. Documentation links, code fences, and staged whitespace checks pass.

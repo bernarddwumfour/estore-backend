@@ -33,6 +33,8 @@ DEBUG = config("DEBUG", default=False, cast=bool)  # secure-by-default
 
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 
+BFF_SHARED_SECRET = config("BFF_SHARED_SECRET", default="")
+
 RATELIMIT_ENABLE = True
 
 
@@ -263,6 +265,7 @@ MIDDLEWARE = [
     "apps.common.middleware.RateLimitExceptionMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "apps.users.bff_middleware.BFFMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]

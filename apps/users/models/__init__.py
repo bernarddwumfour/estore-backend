@@ -3,6 +3,7 @@ from .customer import CustomerProfile, StaffProfile
 from .address import Address
 from .affiliate import Affiliate
 from .verification_token import VerificationToken
+from .browser_session import BrowserSession
 
 __all__ = [
     "User",
@@ -11,5 +12,6 @@ __all__ = [
     "Address",
     "Affiliate",
     "VerificationToken",
+    "BrowserSession",
     "PasswordResetToken",
 ]

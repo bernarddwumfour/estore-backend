@@ -33,6 +33,7 @@ def get_profile(request):
             "last_name": user.last_name or "",
             "full_name": user.full_name,
             "role": user.role,
+            "is_affiliate": hasattr(user, "affiliate_profile"),
             "phone": user.phone or "",
             "is_verified": user.email_verified,
             "email_verified": user.email_verified,

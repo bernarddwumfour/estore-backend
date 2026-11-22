@@ -16,6 +16,7 @@ from apps.users.utils.token_utils import (
     revoke_token,
 )
 from apps.users.models.user import User
+from apps.users.services.browser_session_service import create_session, delete_session
 from apps.common.logging import log_action, LogSeverity
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,8 @@ def register_user(request):
 def _handle_login(request, action, allowed_roles):
     """Shared login flow for the customer and staff login endpoints."""
     start_time = time.time()
-    email = (request.json_data or {}).get("email", "unknown") if hasattr(request, "json_data") else "unknown"
+    login_data = getattr(request, "json_data", None)
+    email = login_data.get("email", "unknown") if isinstance(login_data, dict) else "unknown"
 
     log_action(
         logger=logger, severity=LogSeverity.DEBUG, action=action,
@@ -119,9 +121,11 @@ def _handle_login(request, action, allowed_roles):
     try:
         data = request.json_data
 
+        if not isinstance(data, dict):
+            return APIResponse.bad_request("Expected a JSON object")
         required_fields = ["email", "password"]
         for field in required_fields:
-            if field not in data or not data[field]:
+            if not isinstance(data.get(field), str) or not data[field]:
                 return APIResponse.bad_request(f"{field} is required")
 
         auth_data, error = AuthService.authenticate_user(
@@ -144,6 +148,11 @@ def _handle_login(request, action, allowed_roles):
             request=request, app_name=APP_NAME,
             extra={"email": email, "user_id": auth_data.get("user", {}).get("id") if isinstance(auth_data, dict) else None},
         )
+        if getattr(request, "is_bff", False):
+            user = User.objects.get(id=auth_data["user"]["id"])
+            # Discard the legacy JWT pair; browser sessions never use these tokens.
+            auth_data.pop("tokens", None)
+            auth_data["session_id"] = create_session(user)
         return APIResponse.success(auth_data, "Login successful")
 
     except Exception as e:
@@ -195,6 +204,9 @@ def logout(request):
     )
 
     try:
+        if getattr(request, "is_bff", False):
+            delete_session(request.headers.get("X-BFF-Session", ""))
+            return APIResponse.success(message="Logged out successfully")
         # Revoke the access token used for this request.
         if getattr(request, "token_payload", None):
             revoke_token(request.token_payload)
