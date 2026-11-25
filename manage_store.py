@@ -10,6 +10,7 @@ STORES = {
     "oakandloom": ".env.oakandloom",
     "tyrepapa": ".env.tyrepapa",
     "oliveandaura": ".env.oliveandaura",
+    "velora": ".env.velora",
 }
 DEFAULT_BACKEND_PORTS = {
     "iplug": "8000",
@@ -17,11 +18,12 @@ DEFAULT_BACKEND_PORTS = {
     "oakandloom": "8001",
     "tyrepapa": "8002",
     "oliveandaura": "8003",
+    "velora": "8004",
 }
 
 if len(sys.argv) < 3 or sys.argv[1] not in STORES:
     raise SystemExit(
-        "Usage: venv/bin/python manage_store.py {iplug|oak|tyrepapa|oliveandaura} "
+        "Usage: venv/bin/python manage_store.py {iplug|oak|tyrepapa|oliveandaura|velora} "
         "<django command> [arguments]"
     )
 

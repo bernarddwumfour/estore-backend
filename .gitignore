@@ -19,6 +19,7 @@ staticfiles/
 /.env.oakandloom
 /.env.tyrepapa
 /.env.oliveandaura
+/.env.velora
 venv/
 *.sqlite3
 

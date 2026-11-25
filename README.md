@@ -101,14 +101,16 @@ The project's `createsuperuser` command uses its admin-user creation path. Other
 | `oak` or `oakandloom` | `.env.oakandloom` | 8001 | 3001 |
 | `tyrepapa` | `.env.tyrepapa` | 8002 | 3002 |
 | `oliveandaura` | `.env.oliveandaura` | 8003 | 3003 |
+| `velora` | `.env.velora` | 8004 | 3004 |
 
 ```bash
 venv/bin/python manage_store.py oak runserver
 venv/bin/python manage_store.py tyrepapa runserver
 venv/bin/python manage_store.py oliveandaura runserver
+venv/bin/python manage_store.py velora runserver
 ```
 
-Create each profile with its own database and matching frontend origins. An explicit `runserver` address overrides the default port. The selector also supports commands such as `migrate`, `shell`, and `createsuperuser`. Standard `manage.py` uses the normal environment/default `.env`; `ESTORE_ENV_FILE` explicitly chooses a profile.
+Create each profile with its own database and matching frontend origins. The local Velora profile currently copies iPlug's database and provider settings for previewing; its API port and frontend origins are separate. An explicit `runserver` address overrides the default port. The selector also supports commands such as `migrate`, `shell`, and `createsuperuser`. Standard `manage.py` uses the normal environment/default `.env`; `ESTORE_ENV_FILE` explicitly chooses a profile.
 
 Olive & Aura's selector refuses database/server commands until its profile contains a `DATABASE_URL`, preventing an accidental fallback to the default database. Profiles contain local credentials and are ignored by Git. Their presence in a developer workspace does not configure Render.
 
