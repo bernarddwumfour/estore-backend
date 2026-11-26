@@ -35,7 +35,8 @@ urlpatterns = [
 
 # Serve media files in development
 if settings.DEBUG:
+    from urllib.parse import urlsplit
     urlpatterns += static(
-        settings.MEDIA_URL,
+        urlsplit(settings.MEDIA_URL).path,
         document_root=settings.MEDIA_ROOT,
     )

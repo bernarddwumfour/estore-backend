@@ -101,16 +101,16 @@ The project's `createsuperuser` command uses its admin-user creation path. Other
 | `oak` or `oakandloom` | `.env.oakandloom` | 8001 | 3001 |
 | `tyrepapa` | `.env.tyrepapa` | 8002 | 3002 |
 | `oliveandaura` | `.env.oliveandaura` | 8003 | 3003 |
-| `velora` | `.env.velora` | 8004 | 3004 |
+| `amammre` | `.env.amammre` | 8004 | 3004 |
 
 ```bash
 venv/bin/python manage_store.py oak runserver
 venv/bin/python manage_store.py tyrepapa runserver
 venv/bin/python manage_store.py oliveandaura runserver
-venv/bin/python manage_store.py velora runserver
+venv/bin/python manage_store.py amammre runserver
 ```
 
-Create each profile with its own database and matching frontend origins. The local Velora profile currently copies iPlug's database and provider settings for previewing; its API port and frontend origins are separate. An explicit `runserver` address overrides the default port. The selector also supports commands such as `migrate`, `shell`, and `createsuperuser`. Standard `manage.py` uses the normal environment/default `.env`; `ESTORE_ENV_FILE` explicitly chooses a profile.
+Create each profile with its own database and matching frontend origins. The Amammre Wears profile uses its own database and local API/frontend ports. An explicit `runserver` address overrides the default port. The selector also supports commands such as `migrate`, `shell`, and `createsuperuser`. Standard `manage.py` uses the normal environment/default `.env`; `ESTORE_ENV_FILE` explicitly chooses a profile.
 
 Olive & Aura's selector refuses database/server commands until its profile contains a `DATABASE_URL`, preventing an accidental fallback to the default database. Profiles contain local credentials and are ignored by Git. Their presence in a developer workspace does not configure Render.
 
@@ -151,6 +151,30 @@ CORS and trusted CSRF origins are configured in `settings.py`; the current code 
 | Pickup/affiliate defaults | `STORE_ADDRESS_*`, `AFFILIATE_CODE_DISCOUNT_TYPE`, `AFFILIATE_CODE_DISCOUNT_VALUE`, `AFFILIATE_COMMISSION_BASE` |
 
 Configure credentials per store. Unconfigured providers do not become available merely because their dashboard pages exist.
+
+## Media storage
+
+Set `MEDIA_STORAGE_BACKEND` in each store profile or deployment environment. Existing stores default to `cloudinary` when the variable is absent. Use `local` for Django's filesystem storage or `s3` for AWS S3 and compatible services such as Neon Object Storage. Product, category, template and social uploads use the selected provider; Cloudinary social uploads retain their existing raw-media behavior.
+
+For `s3`, install the dependencies in `requirements.txt`, then configure:
+
+```dotenv
+MEDIA_STORAGE_BACKEND=s3
+AWS_STORAGE_BUCKET_NAME=your-bucket
+AWS_S3_REGION_NAME=your-region
+AWS_S3_ENDPOINT_URL=https://your-provider-endpoint
+AWS_S3_ADDRESSING_STYLE=path
+AWS_ACCESS_KEY_ID=your-access-key
+AWS_SECRET_ACCESS_KEY=your-secret-key
+AWS_QUERYSTRING_AUTH=True
+AWS_QUERYSTRING_EXPIRE=3600
+```
+
+For AWS S3, the endpoint may be omitted; `AWS_S3_ADDRESSING_STYLE=auto` uses the SDK default. On EC2, omit access keys to use the instance's IAM role. S3-compatible providers supply their own endpoint, region and credentials; use the provider's supported addressing style. `AWS_S3_CUSTOM_DOMAIN` optionally points at a CDN domain without the scheme. Bucket access is configured with the provider; the application does not set public ACLs. For a public-read bucket, `AWS_QUERYSTRING_AUTH=False` gives stable public URLs. Private buckets use expiring signed URLs, which need an appropriate lifetime for cached pages and social publishing.
+
+Set the frontend's `MEDIA_IMAGE_ORIGINS` to the exact origin(s) serving uploaded images, and rebuild/restart it after changes. For local storage, set `MEDIA_URL` to an absolute URL such as `http://localhost:8000/media/` or your public API media URL, so the separate frontend can load uploads. Local storage uses `MEDIA_ROOT`; on EC2 it needs persistent disk and a web server configured to serve the media path in production. The frontend needs the API origin in `MEDIA_IMAGE_ORIGINS` unless it is one of the preconfigured local origins.
+
+Switching storage does not copy existing files. File fields store provider-specific names, so existing assets need an explicit migration or a compatible legacy URL strategy before switching a store with existing uploads. Blog cover URLs and saved external URLs remain unchanged.
 
 ## Authentication and authorization
 

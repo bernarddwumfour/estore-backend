@@ -19,6 +19,7 @@ django-cors-headers==4.3.0
 django-environ==0.13.0
 django-ratelimit==4.1.0
 django-redis==6.0.0
+django-storages[s3]==1.14.6
 gunicorn==23.0.0
 h11==0.16.0
 httpcore==1.0.9

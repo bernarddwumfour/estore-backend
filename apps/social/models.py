@@ -309,14 +309,15 @@ class SandboxAccount(models.Model):
 
 
 def _social_media_storage():
-    """Raw Cloudinary storage serves both images and videos; falls back to
-    the default storage when cloudinary isn't installed (dev/tests)."""
-    try:
-        from cloudinary_storage.storage import RawMediaCloudinaryStorage
-        return RawMediaCloudinaryStorage()
-    except ImportError:
-        from django.core.files.storage import default_storage
-        return default_storage
+    """Use raw Cloudinary for media, or the selected S3/local storage."""
+    if getattr(settings, "MEDIA_STORAGE_BACKEND", "cloudinary") == "cloudinary":
+        try:
+            from cloudinary_storage.storage import RawMediaCloudinaryStorage
+            return RawMediaCloudinaryStorage()
+        except ImportError:
+            pass
+    from django.core.files.storage import default_storage
+    return default_storage
 
 
 class SocialMedia(models.Model):

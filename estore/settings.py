@@ -250,9 +250,34 @@ CLOUDINARY_STORAGE = {
     'API_SECRET': _cloudinary_api_secret,
 }
 
-# Set as default media storage
-if "cloudinary_storage" in INSTALLED_APPS:
-    DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+# Select media storage per store. Existing installations retain Cloudinary by
+# default; the local filesystem is also available when Cloudinary isn't installed.
+MEDIA_STORAGE_BACKEND = config("MEDIA_STORAGE_BACKEND", default="cloudinary").strip().lower()
+if MEDIA_STORAGE_BACKEND not in {"cloudinary", "s3", "local"}:
+    raise ValueError("MEDIA_STORAGE_BACKEND must be cloudinary, s3, or local.")
+
+if MEDIA_STORAGE_BACKEND == "s3":
+    AWS_STORAGE_BUCKET_NAME = config("AWS_STORAGE_BUCKET_NAME", default="").strip()
+    if not AWS_STORAGE_BUCKET_NAME:
+        raise ValueError("AWS_STORAGE_BUCKET_NAME is required when MEDIA_STORAGE_BACKEND=s3.")
+    AWS_S3_ENDPOINT_URL = config("AWS_S3_ENDPOINT_URL", default="").strip() or None
+    AWS_S3_REGION_NAME = config("AWS_S3_REGION_NAME", default="").strip() or None
+    AWS_S3_SIGNATURE_VERSION = config("AWS_S3_SIGNATURE_VERSION", default="s3v4").strip()
+    AWS_S3_ADDRESSING_STYLE = config("AWS_S3_ADDRESSING_STYLE", default="auto").strip().lower()
+    if AWS_S3_ADDRESSING_STYLE not in {"auto", "path", "virtual"}:
+        raise ValueError("AWS_S3_ADDRESSING_STYLE must be auto, path, or virtual.")
+    AWS_S3_CUSTOM_DOMAIN = config("AWS_S3_CUSTOM_DOMAIN", default="").strip() or None
+    AWS_QUERYSTRING_AUTH = config("AWS_QUERYSTRING_AUTH", default=True, cast=bool)
+    AWS_QUERYSTRING_EXPIRE = config("AWS_QUERYSTRING_EXPIRE", default=3600, cast=int)
+    AWS_S3_FILE_OVERWRITE = False
+    AWS_DEFAULT_ACL = None
+    # boto3's normal credential chain supports access keys, session tokens,
+    # named profiles, and EC2 instance roles without requiring static keys.
+    DEFAULT_FILE_STORAGE = "storages.backends.s3.S3Storage"
+elif MEDIA_STORAGE_BACKEND == "local":
+    DEFAULT_FILE_STORAGE = "django.core.files.storage.FileSystemStorage"
+elif "cloudinary_storage" in INSTALLED_APPS:
+    DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
 
 # ------------------------------------------------------------------------------
 # MIDDLEWARE
@@ -520,7 +545,7 @@ USE_HTTPS = config("USE_HTTPS", default=False, cast=bool)
 
 
 # Base URL to serve media files from
-MEDIA_URL = "/media/"
+MEDIA_URL = config("MEDIA_URL", default="/media/")
 
 # Absolute filesystem path to the directory that will hold user-uploaded files
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
