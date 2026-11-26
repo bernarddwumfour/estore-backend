@@ -19,7 +19,6 @@ staticfiles/
 /.env.oakandloom
 /.env.tyrepapa
 /.env.oliveandaura
-/.env.velora
 venv/
 *.sqlite3
 
@@ -35,3 +34,4 @@ venv/
 # OS
 .DS_Store
 Thumbs.db
+/.env.amammre
